@@ -9,10 +9,10 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional, List, Dict
 
-import bcrypt
 import numpy as np
 import pandas as pd
 import streamlit as st
+import bcrypt
 
 # ----- PDF / ReportLab imports (ADD THESE) -----
 from reportlab.pdfgen import canvas
@@ -78,7 +78,8 @@ def require_login():
                     "username": username,
                     "name": user_cfg.get("name", username),
                 }
-                st.experimental_rerun()
+                st.rerun()
+
             else:
                 st.sidebar.error("Invalid username or password.")
 
