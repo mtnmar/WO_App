@@ -8,3 +8,5 @@ xlsxwriter
 pyarrow
 python-docx
 streamlit-authenticator
+bcrypt
+

@@ -9,6 +9,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional, List, Dict
 
+import bcrypt
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -33,6 +34,65 @@ DEFAULT_PARQUET_DIR = APP_DIR / "parquet_db"
 
 st.set_page_config(page_title="📊 Reporting Hub", layout="wide")
 st.title("📊 Reporting Hub — Consolidated Maintenance & Cost Report")
+
+# ============== Auth & access helpers ==============
+
+def get_app_config():
+    """Return app_config from st.secrets, or empty dict if missing."""
+    try:
+        return st.secrets["app_config"]
+    except Exception:
+        return {}
+
+APP_CONFIG = get_app_config()
+
+def require_login():
+    """Simple username/password login using bcrypt hashes from app_config."""
+    # Already logged in?
+    if "user" in st.session_state:
+        return
+
+    creds = APP_CONFIG.get("credentials", {}).get("usernames", {})
+    if not creds:
+        st.error("Auth configuration missing. Please contact the app admin.")
+        st.stop()
+
+    with st.sidebar.form("login_form", clear_on_submit=False):
+        st.markdown("### Login")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Sign in")
+
+    if submitted:
+        user_cfg = creds.get(username)
+        if user_cfg is None:
+            st.sidebar.error("Invalid username or password.")
+        else:
+            stored_hash = user_cfg["password"]
+            try:
+                ok = bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8"))
+            except Exception:
+                ok = False
+            if ok:
+                st.session_state["user"] = {
+                    "username": username,
+                    "name": user_cfg.get("name", username),
+                }
+                st.experimental_rerun()
+            else:
+                st.sidebar.error("Invalid username or password.")
+
+    if "user" not in st.session_state:
+        st.stop()
+
+# Force login before showing any app content
+require_login()
+
+st.sidebar.markdown(
+    f"**User:** {st.session_state['user']['name']} "
+    f"(`{st.session_state['user']['username']}`)"
+)
+
 
 # --- Shared PARQUET_DIR ---
 PARQUET_DIR = Path(
