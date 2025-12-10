@@ -3592,11 +3592,7 @@ def _render_inventory_analysis(df_parts, df_tx, start_date, end_date, locations)
         ttl = doc.add_paragraph()
         rn = ttl.add_run(f"Inventory KPI Report — {loc_label_for_display} — {period_mode}")
         ...
-        st.download_button(
-            "Download KPI Word Report (current filter)",
-            data=bio.getvalue(),
-            file_name=f"Inventory_KPI_Report_{safe_loc_tag}_{period_tag}.docx",
-        )
+
 
         doc.add_paragraph(
             f"PO/WO coverage (NET): {0 if coverage_net is None or np.isnan(coverage_net) else coverage_net:.2f}%. "
