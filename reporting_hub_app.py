@@ -1,20 +1,24 @@
-# reporting_hub_app.py
 from __future__ import annotations
 
 import io
 import re
 import os
-import base64 
-from datetime import date, datetime
+import base64
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-import bcrypt
 
-# ----- PDF / ReportLab imports (ADD THESE) -----
+# bcrypt is optional – if missing, we disable login
+try:
+    import bcrypt  # type: ignore[import]
+except ModuleNotFoundError:
+    bcrypt = None
+
+# ----- PDF / ReportLab imports -----
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.pdfbase import pdfmetrics
@@ -22,7 +26,6 @@ from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.platypus import Table, TableStyle
 from reportlab.lib.utils import ImageReader
-
 
 
 # ========================================
@@ -35,6 +38,7 @@ DEFAULT_PARQUET_DIR = APP_DIR / "parquet_db"
 st.set_page_config(page_title="📊 Reporting Hub", layout="wide")
 st.title("📊 Reporting Hub — Consolidated Maintenance & Cost Report")
 
+
 # ============== Auth & access helpers ==============
 
 def get_app_config():
@@ -44,10 +48,26 @@ def get_app_config():
     except Exception:
         return {}
 
+
 APP_CONFIG = get_app_config()
 
+
 def require_login():
-    """Simple username/password login using bcrypt hashes from app_config."""
+    """
+    Simple username/password login using bcrypt hashes from app_config.
+
+    If bcrypt is not available, login is **disabled** and user is auto-logged in
+    as 'local_dev'.
+    """
+    # If bcrypt is missing, skip login entirely (dev mode)
+    if bcrypt is None:
+        if "user" not in st.session_state:
+            st.session_state["user"] = {
+                "username": "local_dev",
+                "name": "Local Dev",
+            }
+        return
+
     # Already logged in?
     if "user" in st.session_state:
         return
@@ -79,20 +99,21 @@ def require_login():
                     "name": user_cfg.get("name", username),
                 }
                 st.rerun()
-
             else:
                 st.sidebar.error("Invalid username or password.")
 
     if "user" not in st.session_state:
         st.stop()
 
-# Force login before showing any app content
+
+# Force login (or auto-dev) before showing any app content
 require_login()
 
 st.sidebar.markdown(
     f"**User:** {st.session_state['user']['name']} "
     f"(`{st.session_state['user']['username']}`)"
 )
+
 
 
 # --- Shared PARQUET_DIR ---
@@ -111,13 +132,9 @@ DATA_FILES: Dict[str, str] = {
     "expected": "Expected.parquet",       # for Expected Service tab
 }
 
-from pathlib import Path  # you already have this, but just make sure it's imported
-
 # ---------------------------------------------------
 # Optional Users.parquet for assignee dropdowns (WO tab)
 # ---------------------------------------------------
-# Try to resolve a Users.parquet from the same PARQUET_DIR the app uses,
-# then fall back to the app folder, if needed.
 _parq_dir = Path(globals().get("PARQUET_DIR", Path.cwd() / "parquet_db"))
 
 USERS_PATH: Optional[Path] = None
@@ -128,8 +145,6 @@ for _p in [
     if _p.is_file():
         USERS_PATH = _p
         break
-
-
 
 
 # ========================================
@@ -180,6 +195,7 @@ def _collect_parent_locations_from_locdb(parquet_dir: Path) -> pd.Series:
         .sort_values()
     )
 
+
 def _find(df: pd.DataFrame, *cands: str) -> Optional[str]:
     """
     Case-insensitive, space/underscore-insensitive column finder.
@@ -214,6 +230,36 @@ def _find(df: pd.DataFrame, *cands: str) -> Optional[str]:
             return norm_map[key]
 
     return None
+
+
+def _get_last_parquet_update(parquet_dir: Path):
+    """
+    Return the most recent modification datetime of any .parquet file
+    in parquet_dir. If none found or error, return None.
+    """
+    try:
+        latest_ts = None
+        for p in parquet_dir.glob("*.parquet"):
+            if not p.is_file():
+                continue
+            ts = p.stat().st_mtime
+            if latest_ts is None or ts > latest_ts:
+                latest_ts = ts
+        if latest_ts is None:
+            return None
+        return datetime.fromtimestamp(latest_ts)
+    except Exception:
+        return None
+
+
+# Show approximate last update time based on parquet file mtimes
+_last_upd = _get_last_parquet_update(PARQUET_DIR)
+if _last_upd:
+    st.sidebar.caption(f"🕒 DB last updated (approx): {_last_upd:%Y-%m-%d %H:%M}")
+else:
+    st.sidebar.caption("🕒 DB last updated: n/a")
+
+
     
 # =========================
 # PDF KPI HELPERS
@@ -2295,7 +2341,22 @@ all_locations = _collect_parent_locations_from_locdb(PARQUET_DIR)
 
 st.sidebar.markdown("### Global Filters")
 
-default_start, default_end = _guess_date_range(dfs)
+# Guess overall min/max from data
+guess_start, guess_end = _guess_date_range(dfs)
+
+today = date.today()
+twelve_months_ago = today - timedelta(days=365)
+
+# Safety fallbacks
+if guess_start is None:
+    guess_start = twelve_months_ago
+if guess_end is None:
+    guess_end = today
+
+# Default: last 12 months, but never earlier than guessed min
+default_start = max(guess_start, twelve_months_ago)
+# Default end: min(guessed max, today)
+default_end = guess_end if guess_end <= today else today
 
 start_date = st.sidebar.date_input("Start date", value=default_start)
 end_date = st.sidebar.date_input("End date", value=default_end)
@@ -2304,11 +2365,15 @@ if start_date > end_date:
     st.sidebar.error("Start date cannot be after end date.")
     st.stop()
 
+# Locations:
+# • UI: start with none selected
+# • Logic: your page code already treats empty as "all"
 if len(all_locations) > 0:
     selected_locations = st.sidebar.multiselect(
         "Locations",
         options=list(all_locations),
-        default=list(all_locations),
+        default=[],
+        help="If no locations are selected, all locations are included.",
     )
 else:
     selected_locations = []
