@@ -3641,7 +3641,7 @@ def _render_inventory_analysis(df_parts, df_tx, start_date, end_date, locations)
         st.download_button(
             "Download KPI Word Report (current filter)",
             data=bio.getvalue(),
-            file_name=f"Inventory_KPI_Report_{pick_loc.replace(' ','_')}_{period_tag}.docx",
+            file_name=f"Inventory_KPI_Report_{safe_loc_tag}_{period_tag}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             use_container_width=True
         )
