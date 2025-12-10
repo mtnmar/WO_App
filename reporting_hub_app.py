@@ -4,13 +4,19 @@ import io
 import re
 import os
 import base64
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Dict
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except ImportError:
+    ZoneInfo = None
+
 
 # bcrypt is optional – if missing, we disable login
 try:
@@ -232,24 +238,33 @@ def _find(df: pd.DataFrame, *cands: str) -> Optional[str]:
     return None
 
 
-def _get_last_parquet_update(parquet_dir: Path):
+def _get_last_parquet_update(parquet_dir: Path, tz_name: str = "America/New_York"):
     """
     Return the most recent modification datetime of any .parquet file
-    in parquet_dir. If none found or error, return None.
+    in parquet_dir, converted to the given timezone (default: America/New_York).
+    If none found or error, return None.
     """
     try:
         latest_ts = None
         for p in parquet_dir.glob("*.parquet"):
             if not p.is_file():
                 continue
-            ts = p.stat().st_mtime
+            ts = p.stat().st_mtime  # POSIX timestamp (assume UTC)
             if latest_ts is None or ts > latest_ts:
                 latest_ts = ts
+
         if latest_ts is None:
             return None
-        return datetime.fromtimestamp(latest_ts)
+
+        # Interpret as UTC, then convert to desired timezone
+        dt_utc = datetime.fromtimestamp(latest_ts, tz=timezone.utc)
+        if ZoneInfo is not None:
+            return dt_utc.astimezone(ZoneInfo(tz_name))
+        # Fallback if ZoneInfo isn't available
+        return dt_utc
     except Exception:
         return None
+
 
 
 # Show approximate last update time based on parquet file mtimes
