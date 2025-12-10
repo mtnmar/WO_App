@@ -7078,25 +7078,323 @@ def _render_wo_forms_pdf_page():
 
 
 
+def _render_hours_worksheet_page():
+    """
+    Hours Reading Entry — simple type-ahead dropdown
+
+    • Asset chosen from a selectbox (search-as-you-type) from Ass_DB.parquet
+    • When selected, we look up the Asset ID
+    • Reading is optional (entered as text, parsed on Save)
+    • Staging table columns: Asset, ID, Reading
+    • Download CURRENT entries + BLANK worksheet
+    """
+    from pathlib import Path
+    import pandas as pd
+    import numpy as np
+    import streamlit as st
+
+    st.markdown("### ⏱ Hours Reading Entry")
+
+    # -----------------------------
+    # Locate Ass_DB.parquet
+    # -----------------------------
+    parq_dir = Path(
+        globals().get("PARQUET_DIR", st.session_state.get("parquet_dir", ""))
+        or (Path.cwd() / "parquet_db")
+    )
+    ass_path = parq_dir / "Ass_DB.parquet"
+    if not ass_path.is_file():
+        st.error(
+            "Could not find **Ass_DB.parquet**.\n\n"
+            f"Expected at: {ass_path}"
+        )
+        return
+
+    # -----------------------------
+    # Cached loader for assets
+    # -----------------------------
+    @st.cache_data(show_spinner=False)
+    def _hours_load_assets(path_str: str):
+        path = Path(path_str)
+        try:
+            try:
+                df_ass = load_parquet(path)  # type: ignore[name-defined]
+            except Exception:
+                df_ass = pd.read_parquet(path)
+        except Exception:
+            return pd.DataFrame(), None, None, []
+
+        if df_ass is None or df_ass.empty:
+            return pd.DataFrame(), None, None, []
+
+        # "Name" is what the user types / sees
+        name_col = _find(df_ass, "Name", "Asset Name", "Asset")  # type: ignore[name-defined]
+        id_col   = _find(df_ass, "ID", "Asset ID", "Asset_ID", "AssetID")  # type: ignore[name-defined]
+
+        if name_col is None or id_col is None:
+            return pd.DataFrame(), None, None, []
+
+        df_assets = df_ass[[name_col, id_col]].copy()
+        df_assets = df_assets.dropna(subset=[name_col]).drop_duplicates(subset=[name_col])
+
+        options = sorted(df_assets[name_col].astype(str).tolist())
+        return df_assets, name_col, id_col, options
+
+    df_assets, name_col, id_col, asset_options = _hours_load_assets(str(ass_path))
+
+    if df_assets.empty or name_col is None or id_col is None or not asset_options:
+        st.error("No usable assets found in Ass_DB.parquet (need Name + ID columns).")
+        return
+
+    # -----------------------------
+    # Session state
+    # -----------------------------
+    ss = st.session_state
+    ss.setdefault("hours_entries", pd.DataFrame(columns=["Asset", "ID", "Reading"]))
+    ss.setdefault("hours_selected_asset", "")
+    ss.setdefault("hours_inputs", {"reading": ""})
+    ss.setdefault("hours_focus_asset", False)  # for refocus after save
+    df_entries = ss["hours_entries"]
+
+    # -----------------------------
+    # JS focus helper (like pre-op)
+    # -----------------------------
+    def _focus_asset_select_now():
+        if ss.get("hours_focus_asset", False):
+            try:
+                import streamlit.components.v1 as components
+                components.html(
+                    """
+                    <script>
+                    const t=setInterval(()=>{
+                      const inputs=parent.document.querySelectorAll('input');
+                      for(const el of inputs){
+                        const aria=el.getAttribute('aria-label')||'';
+                        if(aria.includes('Asset')){ 
+                          el.focus(); 
+                          el.select(); 
+                          clearInterval(t); 
+                          break;
+                        }
+                      }
+                    },50);
+                    </script>
+                    """,
+                    height=0,
+                )
+            except Exception:
+                pass
+            ss["hours_focus_asset"] = False
+
+    st.caption(
+        "Start typing the asset in the dropdown below — it will auto-complete. "
+        "Once you pick one, we pull the Asset ID from Ass_DB. Reading is optional."
+    )
+
+    # -----------------------------
+    # Asset dropdown (type-ahead)
+    # -----------------------------
+    all_opts = [""] + asset_options
+    current_sel = ss.get("hours_selected_asset", "")
+    try:
+        default_idx = all_opts.index(current_sel) if current_sel in all_opts else 0
+    except ValueError:
+        default_idx = 0
+
+    selected_asset = st.selectbox(
+        "Asset",
+        options=all_opts,
+        index=default_idx,
+        help="Click and start typing to search by asset name/number.",
+    )
+    ss["hours_selected_asset"] = selected_asset
+
+    # Try to focus the Asset control when needed
+    _focus_asset_select_now()
+
+    # Look up ID for the selected asset
+    if selected_asset:
+        row = df_assets[df_assets[name_col].astype(str) == str(selected_asset)].iloc[0]
+        asset_id_val = str(row[id_col])
+    else:
+        asset_id_val = ""
+
+    # Show the ID so they can see what will go into the table
+    st.markdown(
+        f"""
+        <div style="padding:8px;border:1px solid #333;border-radius:8px;background:#111;max-width:320px;">
+          <div style="opacity:.7;font-size:.8rem;">Asset ID</div>
+          <div style="font-weight:800;font-size:1.1rem;">{asset_id_val}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # -----------------------------
+    # Reading (optional, text input)
+    # -----------------------------
+    reading_str = st.text_input(
+        "Reading (optional)",
+        value=ss["hours_inputs"].get("reading", ""),
+    )
+    ss["hours_inputs"]["reading"] = reading_str
+
+    # -----------------------------
+    # Single Save button
+    # -----------------------------
+    def _append_row_and_reset():
+        if not selected_asset:
+            st.warning("Please select an Asset from the dropdown.")
+            return
+
+        # Parse reading only on save
+        reading_val = None
+        rs = reading_str.strip()
+        if rs:
+            try:
+                reading_val = float(rs)
+            except ValueError:
+                st.warning("Reading must be numeric (or leave it blank).")
+                return
+
+        row = {
+            "Asset": selected_asset,
+            "ID": asset_id_val,
+            "Reading": reading_val,
+        }
+
+        ss["hours_entries"] = pd.concat(
+            [ss["hours_entries"], pd.DataFrame([row])],
+            ignore_index=True,
+        )
+        st.success("Reading row added.")
+
+        # Reset to allow immediate new entry
+        ss["hours_selected_asset"] = ""
+        ss["hours_inputs"]["reading"] = ""
+        ss["hours_focus_asset"] = True  # ask JS to focus Asset next run
+
+        # Rerun to clear UI & focus asset
+        if hasattr(st, "rerun"):
+            st.rerun()
+        elif hasattr(st, "experimental_rerun"):
+            st.experimental_rerun()
+
+    if st.button("Save", use_container_width=True):
+        _append_row_and_reset()
+
+    # -----------------------------
+    # Current entries table
+    # -----------------------------
+    st.markdown("#### Current entries")
+    df_entries = ss["hours_entries"]
+
+    if df_entries.empty:
+        st.info("No readings added yet.")
+    else:
+        with st.expander("Show current entries", expanded=False):
+            st.dataframe(df_entries, hide_index=True, use_container_width=True)
+            if st.button("🧹 Clear CURRENT table", use_container_width=True, key="hours_clear_table"):
+                ss["hours_entries"] = pd.DataFrame(columns=["Asset", "ID", "Reading"])
+                if hasattr(st, "rerun"):
+                    st.rerun()
+                elif hasattr(st, "experimental_rerun"):
+                    st.experimental_rerun()
+
+    # -----------------------------
+    # Blank sheet rows (for printing/manual)
+    # -----------------------------
+    st.markdown("---")
+    num_blank_rows = st.number_input(
+        "Blank sheet rows (for manual fill)",
+        min_value=5,
+        max_value=200,
+        value=30,
+        step=5,
+    )
+
+    df_blank = pd.DataFrame(
+        {
+            "Asset":   ["" for _ in range(num_blank_rows)],
+            "ID":      ["" for _ in range(num_blank_rows)],
+            "Reading": ["" for _ in range(num_blank_rows)],
+        }
+    )
+
+    # -----------------------------
+    # Helper: DataFrame → XLSX bytes (global-safe)
+    # -----------------------------
+    global to_xlsx_bytes
+    try:
+        _ = to_xlsx_bytes  # type: ignore[name-defined]
+    except NameError:
+        from io import BytesIO
+
+        def to_xlsx_bytes(df, sheet_name="Sheet1"):
+            buf = BytesIO()
+            with pd.ExcelWriter(buf, engine="xlsxwriter") as xw:
+                df.to_excel(xw, index=False, sheet_name=sheet_name)
+            buf.seek(0)
+            return buf.getvalue()
+
+        globals()["to_xlsx_bytes"] = to_xlsx_bytes
+
+    # -----------------------------
+    # Download buttons
+    # -----------------------------
+    st.markdown("#### 📥 Downloads")
+    col_filled, col_blank = st.columns(2)
+
+    with col_filled:
+        st.download_button(
+            "⬇️ Download CURRENT entries (XLSX)",
+            data=to_xlsx_bytes(df_entries, sheet_name="Hours_Readings"),
+            file_name="Hours_Readings_Current.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            disabled=df_entries.empty,
+            use_container_width=True,
+        )
+
+    with col_blank:
+        st.download_button(
+            "⬇️ Download BLANK reading sheet (XLSX)",
+            data=to_xlsx_bytes(df_blank, sheet_name="Hours_Readings_Blank"),
+            file_name="Hours_Readings_Blank.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+    st.caption(
+        "Type to search for an asset, select it, optionally enter a reading, "
+        "and build a staging list you can download as Excel."
+    )
+
+
+
+
 # =========================
-# MAIN PAGE TABS + PDF TAB
+# MAIN PAGE ROUTER (render ONE page at a time)
 # =========================
 
-tab_costs, tab_inv_analysis, tab_trans, tab_wo, tab_expected, tab_pdf, tab_wo_forms = st.tabs(
-    [
-        "💵 Costs & Trends",
-        "📈 Inventory Analysis",
-        "↕ Transactions",
-        "🧾 Work Orders",
-        "🛠 Expected Service",
-        "📄 PDF Report",
-        "🧾 WO Forms & PDFs",
-    ]
+PAGE_LABELS = [
+    "💵 Costs & Trends",
+    "📈 Inventory Analysis",
+    "↕ Transactions",
+    "🧾 Work Orders",
+    "🛠 Expected Service",
+    "🧾 WO Forms & PDFs",
+    "⏱ Hours Worksheet",
+    "📄 PDF Report",
+]
+
+current_page = st.sidebar.radio(
+    "📑 Reporting Hub Page",
+    PAGE_LABELS,
+    index=0,
 )
 
-
-
-with tab_costs:
+# --- Costs & Trends ---
+if current_page == "💵 Costs & Trends":
     _render_costs_trends(
         df_all=dfs.get("costs_trends", pd.DataFrame()),
         global_start=start_date,
@@ -7104,7 +7402,8 @@ with tab_costs:
         selected_locations=selected_locations,
     )
 
-with tab_inv_analysis:
+# --- Inventory Analysis ---
+elif current_page == "📈 Inventory Analysis":
     _render_inventory_analysis(
         df_parts=dfs.get("parts", pd.DataFrame()),
         df_tx=dfs.get("transactions", pd.DataFrame()),
@@ -7113,7 +7412,9 @@ with tab_inv_analysis:
         locations=selected_locations,
     )
 
-with tab_trans:
+
+# --- Transactions ---
+elif current_page == "↕ Transactions":
     render_transactions(
         df_tx=dfs.get("transactions", pd.DataFrame()),
         start_date=start_date,
@@ -7121,7 +7422,8 @@ with tab_trans:
         selected_locations=selected_locations,
     )
 
-with tab_wo:
+# --- Work Orders Report ---
+elif current_page == "🧾 Work Orders":
     render_wo_report(
         df_wo=dfs.get("workorders", pd.DataFrame()),
         start_date=start_date,
@@ -7129,36 +7431,39 @@ with tab_wo:
         selected_locations=selected_locations,
     )
 
-with tab_expected:
+# --- Expected Service ---
+elif current_page == "🛠 Expected Service":
     render_expected_service(
         df_expected=dfs.get("expected", pd.DataFrame()),
         selected_locations=selected_locations,
     )
-with tab_wo_forms:
-    _render_wo_forms_pdf_page() 
 
+# --- WO Forms & PDFs (your new tab) ---
+elif current_page == "🧾 WO Forms & PDFs":
+    _render_wo_forms_pdf_page()
 
-# === PDF REPORT TAB
-with tab_pdf:
+# --- Hours Worksheet (new page) ---
+elif current_page == "⏱ Hours Worksheet":
+    _render_hours_worksheet_page()
+
+# --- PDF Report ---
+elif current_page == "📄 PDF Report":
     st.markdown("### 📄 PDF Report")
 
-    def _filter_df_to_window_for_pdf(
-        df: pd.DataFrame,
-        start: date,
-        end: date,
-        date_cols: list[str],
-    ) -> pd.DataFrame:
-        if df is None or df.empty or not (start and end):
+    def _filter_df_to_window_for_pdf(df: pd.DataFrame,
+                                     start: date,
+                                     end: date,
+                                     date_cols: list[str]) -> pd.DataFrame:
+        """Apply date range to the first existing date_col in df."""
+        if df is None or df.empty or not date_cols:
             return df
-        df = df.copy()
         date_col = None
         for c in date_cols:
             if c in df.columns:
                 date_col = c
                 break
-        if not date_col:
+        if date_col is None:
             return df
-
         s = pd.to_datetime(df[date_col], errors="coerce")
         mask = s.dt.date.between(start, end)
         return df.loc[mask].copy()
@@ -7175,15 +7480,7 @@ with tab_pdf:
     df_tx_pdf       = _filter_by_locations(df_tx_pdf, selected_locations)
     df_expected_pdf = _filter_by_locations(df_expected_pdf, selected_locations)
 
-    # ---------- apply *date* window ----------
-    # For costs_trends, if it has a Period/Date type column, filter too
-    df_costs_pdf = _filter_df_to_window_for_pdf(
-        df_costs_pdf,
-        start_date,
-        end_date,
-        ["Date", "Period", "Completed On"],
-    )
-
+    # ---------- apply *date range* (where it makes sense) ----------
     df_tx_pdf = _filter_df_to_window_for_pdf(
         df_tx_pdf,
         start_date,
