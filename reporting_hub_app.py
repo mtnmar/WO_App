@@ -5275,6 +5275,73 @@ def render_wo_report(
         text = f"{wo} - {title} - {label_kind}"
         day_items.setdefault(sched_date, []).append(text)
 
+    # ---------- Normalize Overdue / Open tables (IsOpen = True, proper Overdue) ----------
+    today = _date.today()
+
+    def _pick_col_wo(df_in: pd.DataFrame, candidates: list[str]) -> str | None:
+        if df_in is None or df_in.empty:
+            return None
+        lowmap = {str(c).lower(): c for c in df_in.columns}
+        for c in candidates:
+            if c in df_in.columns:
+                return c
+            lc = str(c).lower()
+            if lc in lowmap:
+                return lowmap[lc]
+        return None
+
+    # Work from whichever df is non-empty to locate shared column names
+    base_df_for_cols = df_overdue if not df_overdue.empty else df_open_due_started
+
+    due_col_all = _pick_col_wo(
+        base_df_for_cols,
+        ["Due date", "Due Date", "Due_Date", "due_date"],
+    )
+    isopen_col_all = _pick_col_wo(
+        base_df_for_cols,
+        ["IsOpen", "Is Open", "is_open", "ISOPEN"],
+    )
+    status_col_all = _pick_col_wo(
+        base_df_for_cols,
+        ["wo_status", "Status", "Status Name"],
+    )
+
+    def _is_open_mask(df_in: pd.DataFrame, isopen_col: str) -> pd.Series:
+        s = df_in[isopen_col]
+        if s.dtype == bool:
+            return s.fillna(False)
+        # treat non-zero numeric or truthy strings as open
+        s_num = pd.to_numeric(s, errors="coerce")
+        mask_num = s_num.fillna(0).ne(0)
+        # also allow "true"/"yes" strings
+        s_str = s.astype(str).str.strip().str.lower()
+        mask_str = s_str.isin(["true", "yes", "y"])
+        return mask_num | mask_str
+
+    # --- Rebuild df_overdue: IsOpen = True AND DueDate < today ---
+    if due_col_all and isopen_col_all and due_col_all in df_overdue.columns and isopen_col_all in df_overdue.columns:
+        due_ser = pd.to_datetime(df_overdue[due_col_all], errors="coerce").dt.date
+        mask_open_over = _is_open_mask(df_overdue, isopen_col_all)
+        mask_due_past = due_ser < today
+        df_overdue = df_overdue[mask_open_over & mask_due_past].copy()
+
+    # --- Rebuild df_open_due_started: IsOpen = True (optionally Status in [Due, Started]) ---
+    if isopen_col_all and isopen_col_all in df_open_due_started.columns:
+        mask_open = _is_open_mask(df_open_due_started, isopen_col_all)
+
+        if status_col_all and status_col_all in df_open_due_started.columns:
+            status_norm = (
+                df_open_due_started[status_col_all]
+                .astype(str)
+                .str.strip()
+                .str.lower()
+            )
+            # keep only Due / Started if the column exists
+            mask_status = status_norm.isin(["due", "started"])
+            df_open_due_started = df_open_due_started[mask_open & mask_status].copy()
+        else:
+            df_open_due_started = df_open_due_started[mask_open].copy()
+
     # ---------- Style block for calendar tables ----------
     style_block = """
     <style>
@@ -5338,12 +5405,13 @@ def render_wo_report(
         parts.append("</table>")
         return "".join(parts)
 
-    # ---------- Helpers for PDF table pages ----------
+    # ---------- Helpers for PDF table pages (with pagination) ----------
     def _wrap_row_to_lines(c, text: str, max_width: float) -> list[str]:
         """Return wrapped lines for a row using stringWidth to respect max_width."""
         words = str(text).split()
         if not words:
             return [""]
+
         lines: list[str] = []
         current = ""
         for w in words:
@@ -5358,53 +5426,6 @@ def render_wo_report(
             lines.append(current)
         return lines
 
-    def _draw_table_page(c, title: str, df_table: pd.DataFrame, margin: float):
-        """Draw one table on the CURRENT page with wrapped/indented rows."""
-        width, height = landscape(letter)
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(margin, height - margin, title)
-
-        if df_table is None or df_table.empty:
-            return
-
-        # Table header
-        y = height - margin - 24
-        c.setFont("Helvetica-Bold", 9)
-        headers = list(df_table.columns)
-        header_txt = " | ".join(headers)
-        c.drawString(margin, y, header_txt)
-        y -= 16
-
-        c.setFont("Helvetica", 7)
-        max_width = width - 2 * margin
-
-        for _, row in df_table.iterrows():
-            vals = ["" if pd.isna(v) else str(v) for v in row.tolist()]
-            row_text = " | ".join(vals)
-            lines = _wrap_row_to_lines(c, row_text, max_width)
-
-            needed_height = 9 * len(lines) + 4
-            if y - needed_height < margin:
-                c.showPage()
-                width, height = landscape(letter)
-                c.setFont("Helvetica-Bold", 14)
-                c.drawString(margin, height - margin, title)
-                y = height - margin - 24
-                c.setFont("Helvetica-Bold", 9)
-                c.drawString(margin, y, header_txt)
-                y -= 16
-                c.setFont("Helvetica", 7)
-
-            first = True
-            for line in lines:
-                x = margin if first else margin + 12  # indent wrapped lines
-                first = False
-                c.drawString(x, y, line)
-                y -= 9
-
-            y -= 2  # small gap between rows
-
-    # ---------- Helper: build a calendar + 2 tables PDF ----------
     # ---------- Helper: build a calendar + 2 tables PDF ----------
     def _build_calendar_pdf_bytes(
         title_txt: str,
@@ -5416,9 +5437,9 @@ def render_wo_report(
         """
         Build a 7/30-day calendar PDF + paginated table pages (Overdue / Open).
 
-        - Calendar header: Mon–Sun, aligned to REAL weekdays
-        - Tables use Paragraph-wrapped cells so long descriptions don't run together.
-        - Tables are paginated with MAX_ROWS_PER_PAGE rows per page.
+        - Calendar header: Mon–Sun
+        - Each date is placed under its *real* weekday column.
+        - Tables use wrapped text and MAX_ROWS_PER_PAGE pagination.
         """
         from reportlab.platypus import Table, TableStyle, Paragraph
         from reportlab.lib.styles import ParagraphStyle
@@ -5429,7 +5450,7 @@ def render_wo_report(
 
         margin = 36  # half-inch
         title_height = 24
-        MAX_ROWS_PER_PAGE = 20  # <<< limit rows per page like Expected PDF
+        MAX_ROWS_PER_PAGE = 20
 
         # -------------------------------------------------
         # Page 1: Calendar
@@ -5447,7 +5468,7 @@ def render_wo_report(
         grid_height = grid_top - grid_bottom
 
         cols = 7  # Mon–Sun
-        # number of calendar rows needed (weeks), shifted by weekday
+        # number of calendar rows needed (weeks)
         rows = math.ceil((start_day.weekday() + num_days) / cols)
         cell_w = (width - 2 * margin) / cols
         cell_h = grid_height / rows
@@ -5463,7 +5484,7 @@ def render_wo_report(
         # Build list of days
         days = [start_day + timedelta(days=i) for i in range(num_days)]
 
-        # Draw grid
+        # Draw grid + fill dates based on real weekday
         for row_i in range(rows):
             for col_i in range(cols):
                 x = margin + col_i * cell_w
@@ -5471,10 +5492,8 @@ def render_wo_report(
                 y_bottom = y_top - cell_h
                 c.rect(x, y_bottom, cell_w, cell_h, stroke=1, fill=0)
 
-        # Fill each actual date into the correct weekday column
         c.setFont("Helvetica", 7)
         for offset, day in enumerate(days):
-            # effective index from the first cell, shifted by start_day weekday
             eff_idx = start_day.weekday() + offset  # 0 = Monday
             row_i = eff_idx // cols
             col_i = eff_idx % cols
@@ -5487,7 +5506,7 @@ def render_wo_report(
             c.drawString(x + 2, y_top - 10, day.strftime("%Y-%m-%d"))
 
             # Items for this day
-            items = day_items.get(day, [])  # uses the existing day_items dict
+            items = day_items.get(day, [])
             c.setFont("Helvetica", 7)
             text_y = y_top - 22
             max_lines = int((cell_h - 18) / 9)
@@ -5530,11 +5549,10 @@ def render_wo_report(
 
             c.setFillColor(colors.black)
 
-        # Finish calendar page
         c.showPage()
 
         # -------------------------------------------------
-        # Helper: paginated wrapped tables on subsequent pages
+        # Paginated wrapped tables on subsequent pages
         # -------------------------------------------------
         para_style = ParagraphStyle(
             "tbl",
@@ -5544,11 +5562,9 @@ def render_wo_report(
         )
 
         def _draw_table_pages(title: str, df: pd.DataFrame):
-            """Draw df over as many pages as needed, MAX_ROWS_PER_PAGE rows at a time."""
             if df is None or df.empty:
                 return
 
-            # Ensure we work with a copy so we don't mutate upstream
             df_loc = df.copy()
             headers = list(df_loc.columns)
             n_cols = len(headers)
@@ -5556,21 +5572,19 @@ def render_wo_report(
             avail_width = width - 2 * margin
             avail_height = height - margin - title_height - 12
 
-            # Chunk the dataframe into pages
-            for start in range(0, len(df_loc), MAX_ROWS_PER_PAGE):
-                chunk = df_loc.iloc[start:start + MAX_ROWS_PER_PAGE]
+            for start_idx in range(0, len(df_loc), MAX_ROWS_PER_PAGE):
+                chunk = df_loc.iloc[start_idx:start_idx + MAX_ROWS_PER_PAGE]
 
                 c.setFont("Helvetica-Bold", 14)
                 c.drawString(margin, height - margin, title)
 
-                # Build table data with Paragraphs so cells wrap
                 data: list[list] = []
                 header_cells = [Paragraph(str(h), para_style) for h in headers]
                 data.append(header_cells)
 
                 for _, row in chunk.iterrows():
-                    row_cells = [Paragraph("" if pd.isna(v) else str(v), para_style) for v in row.tolist()]
-                    data.append(row_cells)
+                    cells = [Paragraph("" if pd.isna(v) else str(v), para_style) for v in row.tolist()]
+                    data.append(cells)
 
                 table = Table(data, colWidths=col_widths)
                 table.setStyle(
@@ -5587,20 +5601,17 @@ def render_wo_report(
 
                 tw, th = table.wrapOn(c, avail_width, avail_height)
                 table.drawOn(c, margin, height - margin - title_height - th)
-
                 c.showPage()
 
         # -------------------------------------------------
-        # Pages 2–3+: Overdue / Open tables (paginated)
+        # Pages 2–3+: Overdue / Open tables
         # -------------------------------------------------
         _draw_table_pages("Overdue Work Orders", tbl_overdue)
-        _draw_table_pages("Open Work Orders", tbl_open)
+        _draw_table_pages("Open Work Orders (IsOpen = True)", tbl_open)
 
-        # Finalize
         c.save()
         buf.seek(0)
         return buf.getvalue()
-
 
     # ---------- Build 7-day and 30-day calendars from selected start date ----------
     cal7_html = _build_calendar_grid_html("Next 7 Days", cal_start, 7)
@@ -5614,8 +5625,16 @@ def render_wo_report(
         st.markdown(cal30_html, unsafe_allow_html=True)
 
     # ---------- Prep subset tables for PDF ----------
-    overdue_cols_pdf = [c for c in ["WORKORDER", "TITLE", "Description", "Due date", "assignee", "team_assigned"] if c in df_overdue.columns]
-    open_cols_pdf = [c for c in ["WORKORDER", "TITLE", "Description", "Created on", "Due date", "assignee", "team_assigned"] if c in df_open_due_started.columns]
+    overdue_cols_pdf = [
+        c for c in
+        ["WORKORDER", "TITLE", "Description", "Due date", "assignee", "team_assigned"]
+        if c in df_overdue.columns
+    ]
+    open_cols_pdf = [
+        c for c in
+        ["WORKORDER", "TITLE", "Description", "Created on", "Due date", "assignee", "team_assigned"]
+        if c in df_open_due_started.columns
+    ]
 
     tbl_overdue_pdf = df_overdue[overdue_cols_pdf].copy() if overdue_cols_pdf else df_overdue.copy()
     tbl_open_pdf = df_open_due_started[open_cols_pdf].copy() if open_cols_pdf else df_open_due_started.copy()
@@ -5639,6 +5658,7 @@ def render_wo_report(
         mime="application/pdf",
         key="dl_wo_cal_30_pdf",
     )
+
     
     
 
