@@ -5405,6 +5405,7 @@ def render_wo_report(
             y -= 2  # small gap between rows
 
     # ---------- Helper: build a calendar + 2 tables PDF ----------
+    # ---------- Helper: build a calendar + 2 tables PDF ----------
     def _build_calendar_pdf_bytes(
         title_txt: str,
         start_day: _date,
@@ -5413,11 +5414,11 @@ def render_wo_report(
         tbl_open: pd.DataFrame,
     ) -> bytes:
         """
-        Build a 30-day calendar PDF + 2 table pages (Overdue / Open).
+        Build a 7/30-day calendar PDF + paginated table pages (Overdue / Open).
 
-        - Calendar header: Mon–Sun
-        - Each date is placed under its *real* weekday column.
-        - Tables use wrapped text so long descriptions don't visually run together.
+        - Calendar header: Mon–Sun, aligned to REAL weekdays
+        - Tables use Paragraph-wrapped cells so long descriptions don't run together.
+        - Tables are paginated with MAX_ROWS_PER_PAGE rows per page.
         """
         from reportlab.platypus import Table, TableStyle, Paragraph
         from reportlab.lib.styles import ParagraphStyle
@@ -5428,6 +5429,7 @@ def render_wo_report(
 
         margin = 36  # half-inch
         title_height = 24
+        MAX_ROWS_PER_PAGE = 20  # <<< limit rows per page like Expected PDF
 
         # -------------------------------------------------
         # Page 1: Calendar
@@ -5445,7 +5447,7 @@ def render_wo_report(
         grid_height = grid_top - grid_bottom
 
         cols = 7  # Mon–Sun
-        # number of calendar rows needed (weeks)
+        # number of calendar rows needed (weeks), shifted by weekday
         rows = math.ceil((start_day.weekday() + num_days) / cols)
         cell_w = (width - 2 * margin) / cols
         cell_h = grid_height / rows
@@ -5461,7 +5463,7 @@ def render_wo_report(
         # Build list of days
         days = [start_day + timedelta(days=i) for i in range(num_days)]
 
-        # Draw grid + fill dates based on real weekday
+        # Draw grid
         for row_i in range(rows):
             for col_i in range(cols):
                 x = margin + col_i * cell_w
@@ -5498,7 +5500,6 @@ def render_wo_report(
                     c.drawString(x + 4, text_y, "... more ...")
                     break
 
-                # Only black text for this simpler calendar
                 c.setFillColor(colors.black)
                 s = str(raw)
                 words = s.split()
@@ -5529,10 +5530,11 @@ def render_wo_report(
 
             c.setFillColor(colors.black)
 
+        # Finish calendar page
         c.showPage()
 
         # -------------------------------------------------
-        # Helper for wrapped tables on subsequent pages
+        # Helper: paginated wrapped tables on subsequent pages
         # -------------------------------------------------
         para_style = ParagraphStyle(
             "tbl",
@@ -5541,53 +5543,64 @@ def render_wo_report(
             leading=8,
         )
 
-        def _draw_table_page(title: str, df: pd.DataFrame):
+        def _draw_table_pages(title: str, df: pd.DataFrame):
+            """Draw df over as many pages as needed, MAX_ROWS_PER_PAGE rows at a time."""
             if df is None or df.empty:
                 return
 
-            c.setFont("Helvetica-Bold", 14)
-            c.drawString(margin, height - margin, title)
+            # Ensure we work with a copy so we don't mutate upstream
+            df_loc = df.copy()
+            headers = list(df_loc.columns)
+            n_cols = len(headers)
+            col_widths = [(width - 2 * margin) / max(1, n_cols)] * n_cols
+            avail_width = width - 2 * margin
+            avail_height = height - margin - title_height - 12
 
-            # Convert each cell to Paragraph to enable wrapping
-            data: list[list] = []
-            headers = [Paragraph(str(h), para_style) for h in df.columns]
-            data.append(headers)
+            # Chunk the dataframe into pages
+            for start in range(0, len(df_loc), MAX_ROWS_PER_PAGE):
+                chunk = df_loc.iloc[start:start + MAX_ROWS_PER_PAGE]
 
-            for _, row in df.iterrows():
-                cells = [Paragraph(str(v), para_style) for v in row.tolist()]
-                data.append(cells)
+                c.setFont("Helvetica-Bold", 14)
+                c.drawString(margin, height - margin, title)
 
-            n_cols = len(df.columns)
-            table = Table(
-                data,
-                colWidths=[(width - 2 * margin) / max(1, n_cols)] * n_cols,
-            )
-            table.setStyle(
-                TableStyle(
-                    [
-                        ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
-                        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                        ("FONTSIZE", (0, 0), (-1, -1), 7),
-                        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ]
+                # Build table data with Paragraphs so cells wrap
+                data: list[list] = []
+                header_cells = [Paragraph(str(h), para_style) for h in headers]
+                data.append(header_cells)
+
+                for _, row in chunk.iterrows():
+                    row_cells = [Paragraph("" if pd.isna(v) else str(v), para_style) for v in row.tolist()]
+                    data.append(row_cells)
+
+                table = Table(data, colWidths=col_widths)
+                table.setStyle(
+                    TableStyle(
+                        [
+                            ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+                            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+                            ("FONTSIZE", (0, 0), (-1, -1), 7),
+                            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ]
+                    )
                 )
-            )
-            tw, th = table.wrapOn(c, width - 2 * margin, height - 2 * margin)
-            # Draw just below the title
-            table.drawOn(c, margin, height - margin - title_height - th)
-            c.showPage()
+
+                tw, th = table.wrapOn(c, avail_width, avail_height)
+                table.drawOn(c, margin, height - margin - title_height - th)
+
+                c.showPage()
 
         # -------------------------------------------------
-        # Pages 2–3: Overdue / Open tables
+        # Pages 2–3+: Overdue / Open tables (paginated)
         # -------------------------------------------------
-        _draw_table_page("Overdue Work Orders", tbl_overdue)
-        _draw_table_page("Open Work Orders", tbl_open)
+        _draw_table_pages("Overdue Work Orders", tbl_overdue)
+        _draw_table_pages("Open Work Orders", tbl_open)
 
         # Finalize
         c.save()
         buf.seek(0)
         return buf.getvalue()
+
 
     # ---------- Build 7-day and 30-day calendars from selected start date ----------
     cal7_html = _build_calendar_grid_html("Next 7 Days", cal_start, 7)
