@@ -4492,11 +4492,15 @@ def render_expected_service(
     </style>
     """
 
-    # ---------- Helper: build calendar HTML ----------
+    # ---------- Helper: build calendar HTML (aligned by weekday) ----------
     def _build_calendar_grid_html(title_txt: str, start_day: _date, num_days: int) -> str:
         end_day = start_day + timedelta(days=num_days - 1)
+
+        # Align dates under correct weekday: 0 = Monday
         days = [start_day + timedelta(days=i) for i in range(num_days)]
-        weeks = math.ceil(num_days / 7)
+        first_wd = start_day.weekday()  # 0=Mon
+        cells: list[_date | None] = [None] * first_wd + days
+        weeks = math.ceil(len(cells) / 7)
 
         parts = []
         parts.append(f"<h3>{html.escape(title_txt)} ({start_day} to {end_day})</h3>")
@@ -4512,8 +4516,8 @@ def render_expected_service(
         for _w in range(weeks):
             parts.append("<tr>")
             for _d in range(7):
-                if idx < num_days:
-                    day = days[idx]
+                if idx < len(cells) and cells[idx] is not None:
+                    day = cells[idx]
                     idx += 1
                     items = day_items.get(day, [])
                     cell_html = f"<div><strong>{day.strftime('%Y-%m-%d')}</strong></div>"
@@ -4532,6 +4536,7 @@ def render_expected_service(
                         cell_html += "<ul>" + "".join(lis) + "</ul>"
                     parts.append(f"<td>{cell_html}</td>")
                 else:
+                    idx += 1
                     parts.append("<td>&nbsp;</td>")
             parts.append("</tr>")
 
@@ -4549,6 +4554,9 @@ def render_expected_service(
         tbl_over: pd.DataFrame,
         tbl_due: pd.DataFrame,
     ) -> bytes:
+        from reportlab.platypus import Table, TableStyle, Paragraph
+        from reportlab.lib.styles import getSampleStyleSheet
+
         buf = BytesIO()
         c = canvas.Canvas(buf, pagesize=landscape(letter))
         width, height = landscape(letter)
@@ -4556,7 +4564,17 @@ def render_expected_service(
         margin = 36  # half-inch
         title_height = 24
 
-        # ----------------- Page 1: Calendar -----------------
+        # Styles for wrapped table cells
+        styles = getSampleStyleSheet()
+        cell_style = styles["Normal"]
+        cell_style.fontName = "Helvetica"
+        cell_style.fontSize = 7
+        cell_style.leading = 8
+        cell_style.wordWrap = "CJK"  # allow wrapping
+
+        MAX_ROWS_PER_PAGE = 20  # limit rows per page so table doesn't run off
+
+        # ----------------- Page 1: Calendar (aligned by weekday) -----------------
         c.setFont("Helvetica-Bold", 14)
         c.drawString(
             margin,
@@ -4564,22 +4582,19 @@ def render_expected_service(
             f"{title_txt} ({start_day} to {start_day + timedelta(days=num_days-1)})",
         )
 
-        # Grid geometry
         grid_top = height - margin - title_height
         grid_bottom = margin
         grid_height = grid_top - grid_bottom
 
         cols = 7
-
-        # Align first day under correct weekday (Mon=0..Sun=6)
-        first_weekday = start_day.weekday()
-        total_cells = first_weekday + num_days
-        rows = math.ceil(total_cells / cols)
+        # align by weekday
+        days = [start_day + timedelta(days=i) for i in range(num_days)]
+        first_wd = start_day.weekday()
+        cal_cells: list[_date | None] = [None] * first_wd + days
+        rows = math.ceil(len(cal_cells) / cols)
 
         cell_w = (width - 2 * margin) / cols
         cell_h = grid_height / rows
-
-        days = [start_day + timedelta(days=i) for i in range(num_days)]
 
         # Headers (Mon–Sun)
         c.setFont("Helvetica-Bold", 10)
@@ -4588,147 +4603,113 @@ def render_expected_service(
             y = grid_top + 4
             c.drawString(x, y, name)
 
-        # Calendar cells with weekday offset
-        idx = 0  # index into days[]
+        # Calendar cells
+        idx = 0
         for row_i in range(rows):
             for col_i in range(cols):
-                cell_index = row_i * cols + col_i
-
                 x = margin + col_i * cell_w
                 y_top = grid_top - row_i * cell_h
                 y_bottom = y_top - cell_h
 
                 c.rect(x, y_bottom, cell_w, cell_h, stroke=1, fill=0)
 
-                # skip leading blanks and trailing blanks
-                if cell_index < first_weekday or idx >= num_days:
-                    continue
+                if idx < len(cal_cells) and cal_cells[idx] is not None:
+                    day = cal_cells[idx]
+                    idx += 1
 
-                day = days[idx]
-                idx += 1
+                    # date
+                    c.setFont("Helvetica-Bold", 8)
+                    c.drawString(x + 2, y_top - 10, day.strftime("%Y-%m-%d"))
 
-                # date
-                c.setFont("Helvetica-Bold", 8)
-                c.drawString(x + 2, y_top - 10, day.strftime("%Y-%m-%d"))
+                    # items
+                    items = day_items.get(day, [])  # from outer scope
+                    c.setFont("Helvetica", 7)
+                    text_y = y_top - 22
+                    max_lines = int((cell_h - 18) / 9)
+                    line_count = 0
+                    max_width = cell_w - 8
 
-                # items for this day
-                items = day_items.get(day, [])
-                c.setFont("Helvetica", 7)
-                text_y = y_top - 22
-                max_lines = int((cell_h - 18) / 9)
-                line_count = 0
-                max_width = cell_w - 8
+                    for raw in items:
+                        if line_count >= max_lines:
+                            c.setFillColor(colors.black)
+                            c.drawString(x + 4, text_y, "... more ...")
+                            break
 
-                for raw in items:
-                    if line_count >= max_lines:
-                        c.setFillColor(colors.black)
-                        c.drawString(x + 4, text_y, "... more ...")
-                        break
-
-                    # support ("exp", text) or ("wo", text) or plain text
-                    if isinstance(raw, (tuple, list)) and len(raw) == 2:
-                        item_type, item_text = raw
-                    else:
-                        item_type, item_text = "wo", raw
-
-                    # green for Expected, black for WO
-                    c.setFillColor(colors.green if item_type == "exp" else colors.black)
-
-                    s = str(item_text)
-                    words = s.split()
-                    line = ""
-
-                    for w in words:
-                        test = (line + " " + w).strip()
-                        if c.stringWidth(test, "Helvetica", 7) <= max_width:
-                            line = test
+                        # support ("exp", text) or ("wo", text) or plain text
+                        if isinstance(raw, (tuple, list)) and len(raw) == 2:
+                            item_type, item_text = raw
                         else:
-                            if line_count >= max_lines:
-                                c.setFillColor(colors.black)
-                                c.drawString(x + 4, text_y, "... more ...")
+                            item_type, item_text = "wo", raw
+
+                        # green for Expected, black for WO
+                        c.setFillColor(colors.green if item_type == "exp" else colors.black)
+
+                        s = str(item_text)
+                        words = s.split()
+                        line = ""
+
+                        for w in words:
+                            test = (line + " " + w).strip()
+                            if c.stringWidth(test, "Helvetica", 7) <= max_width:
+                                line = test
+                            else:
+                                if line_count >= max_lines:
+                                    c.setFillColor(colors.black)
+                                    c.drawString(x + 4, text_y, "... more ...")
+                                    line_count += 1
+                                    break
+                                c.drawString(x + 4, text_y, line)
+                                text_y -= 9
                                 line_count += 1
-                                break
+                                line = w
+
+                        if line and line_count < max_lines:
                             c.drawString(x + 4, text_y, line)
                             text_y -= 9
                             line_count += 1
-                            line = w
 
-                    if line and line_count < max_lines:
-                        c.drawString(x + 4, text_y, line)
-                        text_y -= 9
-                        line_count += 1
+                        if line_count >= max_lines:
+                            break
 
-                    if line_count >= max_lines:
-                        break
+                    c.setFillColor(colors.black)
+                else:
+                    idx += 1  # advance even for empty cell
 
-                c.setFillColor(colors.black)
-
+        # Calendar page done
         c.showPage()
 
-        # ---------- Helper to draw a wrapped table on one or more pages ----------
-        from reportlab.platypus import Paragraph
-        from reportlab.lib.styles import ParagraphStyle
-
-        def _draw_wrapped_table_pages(
-            title: str,
-            df_in: pd.DataFrame,
-            header_cols_all: list[str],
-        ):
-            """
-            Draw a wrapped, grid-style table (like the other calendar)
-            across as many pages as needed.
-
-            - Uses only columns that exist in df_in.
-            - Wraps text in each cell with Paragraph.
-            - Handles multi-page tables by chunking rows.
-            """
-            nonlocal c
-
+        # ---------- Helper: paginated, wrapped table pages ----------
+        def _draw_table_pages(title: str, df_in: pd.DataFrame):
             if df_in is None or df_in.empty:
                 return
 
-            # Only keep header columns that exist in the dataframe
-            header_cols = [col for col in header_cols_all if col in df_in.columns]
-            if not header_cols:
-                return
+            df_str = df_in.astype(str).reset_index(drop=True)
+            headers = list(df_str.columns)
+            ncols = max(1, len(headers))
 
-            # Paragraph style for wrapped cells
-            para_style = ParagraphStyle(
-                "tbl",
-                fontName="Helvetica",
-                fontSize=7,
-                leading=8,
-            )
+            col_width = (width - 2 * margin) / ncols
+            avail_width = width - 2 * margin
+            avail_height = height - margin - title_height - 12
 
-            max_rows_per_page = 30  # adjust if you want more/less rows per page
-            n_cols = len(header_cols)
+            total_rows = len(df_str)
+            start_row = 0
 
-            def _render_page(df_page: pd.DataFrame):
-                if df_page.empty:
-                    return
+            while start_row < total_rows:
+                chunk = df_str.iloc[start_row:start_row + MAX_ROWS_PER_PAGE]
 
-                # New page
-                c.setPageSize(landscape(letter))
-                c.setFont("Helvetica-Bold", 14)
-                c.drawString(margin, height - margin, title)
-
-                # Build table data with wrapped cells
-                data: list[list] = []
+                # Build data with Paragraphs for wrapping
+                data = []
                 # header row
-                data.append([Paragraph(str(col), para_style) for col in header_cols])
-
+                header_cells = [Paragraph(str(h), cell_style) for h in headers]
+                data.append(header_cells)
                 # body rows
-                for _, row in df_page[header_cols].iterrows():
-                    cells = []
-                    for col in header_cols:
-                        v = row[col]
-                        txt = "" if pd.isna(v) else str(v)
-                        cells.append(Paragraph(txt, para_style))
-                    data.append(cells)
+                for _, row in chunk.iterrows():
+                    row_cells = [Paragraph(str(v), cell_style) for v in row]
+                    data.append(row_cells)
 
                 table = Table(
                     data,
-                    colWidths=[(width - 2 * margin) / max(1, n_cols)] * n_cols,
+                    colWidths=[col_width] * ncols,
                 )
                 table.setStyle(
                     TableStyle(
@@ -4742,62 +4723,55 @@ def render_expected_service(
                     )
                 )
 
-                # Wrap and draw below the title
-                tw, th = table.wrapOn(c, width - 2 * margin, height - 2 * margin)
-                table.drawOn(c, margin, height - margin - 24 - th)
-                c.showPage()
+                c.setPageSize(landscape(letter))
+                c.setFont("Helvetica-Bold", 14)
+                c.drawString(margin, height - margin, title)
 
-            # Chunk into multiple pages if needed
-            for start in range(0, len(df_in), max_rows_per_page):
-                _render_page(df_in.iloc[start : start + max_rows_per_page])
+                tw, th = table.wrapOn(c, avail_width, avail_height)
+                table.drawOn(c, margin, height - margin - title_height - th)
+
+                c.showPage()
+                start_row += MAX_ROWS_PER_PAGE
 
         # ---------- Pages for each table ----------
 
-        # 1) Open WOs (Proc 2132428) — No Start/Due Date (already condensed)
+        # 1) All Assets — Expected Services Matrix (use view_all from outer scope)
+        try:
+            if view_all is not None and not view_all.empty:
+                _draw_table_pages(
+                    "All Assets — Expected Services Matrix",
+                    view_all,
+                )
+        except NameError:
+            # view_all not defined in this run — just skip it
+            pass
+
+        # 2) Open WOs (Proc 2132428) — No Start/Due Date
         if not table_no_dates.empty:
-            _draw_wrapped_table_pages(
+            _draw_table_pages(
                 "Open WOs (Proc 2132428) — No Start/Due Date",
                 table_no_dates,
-                list(table_no_dates.columns),
             )
 
-        # 2) Needs Service — Name • Last Service Type • Date of Last service
+        # 3) Needs Service
         if not tbl_needs.empty:
-            _draw_wrapped_table_pages(
-                "Needs Service",
-                tbl_needs,
-                ["Name", "Last Service Type", "Date of Last service"],
-            )
+            _draw_table_pages("Needs Service", tbl_needs)
 
-        # 3) New Reading Needed — Name • Last Reading • Date
+        # 4) New Reading Needed
         if not tbl_new.empty:
-            _draw_wrapped_table_pages(
-                "New Reading Needed",
-                tbl_new,
-                ["Name", "Last Reading", "Date"],
-            )
+            _draw_table_pages("New Reading Needed", tbl_new)
 
-        # 4) Overdue — Name • Next Service Type • Remaining
+        # 5) Overdue
         if not tbl_over.empty:
-            _draw_wrapped_table_pages(
-                "Overdue",
-                tbl_over,
-                ["Name", "Next Service Type", "Remaining"],
-            )
+            _draw_table_pages("Overdue", tbl_over)
 
-        # 5) Due — Name • Next Service Type • Remaining
+        # 6) Due
         if not tbl_due.empty:
-            _draw_wrapped_table_pages(
-                "Due",
-                tbl_due,
-                ["Name", "Next Service Type", "Remaining"],
-            )
+            _draw_table_pages("Due", tbl_due)
 
         c.save()
         buf.seek(0)
         return buf.getvalue()
-
-
 
     # ---------- Build and display calendars (HTML) ----------
     cal7_html = _build_calendar_grid_html("Next 7 Days", cal_start, 7)
@@ -4847,7 +4821,6 @@ def render_expected_service(
         mime="application/pdf",
         key="dl_expected_cal_30_pdf",
     )
-
 
 
 
