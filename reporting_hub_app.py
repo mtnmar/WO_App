@@ -7772,7 +7772,7 @@ def _build_ytd_by_location_from_workorders(df_in: pd.DataFrame, year_i: int) -> 
         ["DueDate", "Expected Date", "Date"],
     )
     filtered_dfs_pdf = {
-        "Workorders": df_wo_pdf,
+        "workorders": df_wo_pdf,
         "costs_trends": df_costs_pdf,
         "parts": df_parts_pdf,
         "transactions": df_tx_pdf,
