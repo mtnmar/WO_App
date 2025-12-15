@@ -7677,6 +7677,9 @@ elif current_page == "📄 PDF Report":
     df_parts_pdf    = _filter_by_locations(df_parts_pdf, selected_locations)
     df_tx_pdf       = _filter_by_locations(df_tx_pdf, selected_locations)
     df_expected_pdf = _filter_by_locations(df_expected_pdf, selected_locations)
+    
+    df_wo_pdf = df_costs_pdf.copy()
+
 
     filtered_dfs_pdf = {
         "workorders": df_wo_pdf,
