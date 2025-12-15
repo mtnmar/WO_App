@@ -1882,7 +1882,7 @@ def build_reporting_hub_pdf(
         )
 
         c.showPage()
-        
+
     # ---------------------------------------------------
     # 3b) YTD SUMMARY BY ASSET — OWN PAGE (Workorders only)
     #     Columns: Asset, YTD Total, current month, prev month, ...
@@ -1913,23 +1913,17 @@ def build_reporting_hub_pdf(
             fill_value=0.0,
         )
 
-        # ensure months 1..12 exist and in Jan..Dec order
         for mm in range(1, 13):
             if mm not in p.columns:
                 p[mm] = 0.0
         p = p[[mm for mm in range(1, 13)]]
 
-        # numeric YTD
         p["YTD Total"] = p.sum(axis=1)
-
-        # to columns
         p = p.reset_index()
 
-        # rename month numbers to abbreviations
         month_names = {m: _cal.month_abbr[m] for m in range(1, 13)}
         df_asset = p.rename(columns=month_names)
 
-    # reorder to: Asset, YTD Total, current month, previous month, ...
     if df_asset is not None and not df_asset.empty and ("YTD Total" in df_asset.columns):
         cur_m = int(end_date.month) if end_date else int(datetime.today().month)
         mon_order = (
@@ -1942,84 +1936,46 @@ def build_reporting_hub_pdf(
         remaining = [c for c in df_asset.columns if c not in (base_cols + month_cols)]
         df_asset = df_asset[base_cols + month_cols + remaining]
 
-        # sort rows high -> low by YTD Total
         y = pd.to_numeric(df_asset["YTD Total"], errors="coerce").fillna(0.0)
         df_asset = df_asset.loc[y.sort_values(ascending=False).index].reset_index(drop=True)
 
-    # format AFTER ordering
     if df_asset is not None and not df_asset.empty:
         df_asset = _fmt_currency(df_asset, skip_first=True)
 
-        top_y = height - 1.8 * inch
-
-        MAX_ROWS_PER_PAGE = 18  # <-- tune this as needed (does NOT count header)
-
-        if base_tx is None or base_tx.empty:
-            c.drawString(0.75 * inch, top_y, "No transactions in this window.")
-        else:
-            # Ensure stable index for slicing
-            base_tx = base_tx.reset_index(drop=True)
-
-            total_rows = len(base_tx)
-            start_i = 0
-            page_n = 1
-
-            while start_i < total_rows:
-                chunk = base_tx.iloc[start_i:start_i + MAX_ROWS_PER_PAGE].copy()
-
-                # Draw chunk on current page
-                _draw_table_paged(
-                    chunk,
-                    x=0.5 * inch,
-                    top_y=top_y,
-                    max_width=width - 1.0 * inch,
-                    bottom_margin=0.7 * inch,
-                    font_size=6,
-                    page_title=f"Transactions — Filtered Detail (p{page_n})",
-                )
-
-                start_i += MAX_ROWS_PER_PAGE
-                page_n += 1
-
-                # Only advance page if there is more to draw
-                if start_i < total_rows:
-                    c.showPage()
-                    c.setPageSize(landscape(letter))
-                    width, height = landscape(letter)
-                    _title("Transactions — Filtered Detail (cont.)", height - 0.7 * inch, 18)
-                    c.setFont("Helvetica", 9)
-
-        # Finish this section cleanly
-        c.showPage()
-
-
-
+    top_y_asset = height - 1.8 * inch
+    _draw_table_paged(
+        df_asset,
+        x=0.75 * inch,
+        top_y=top_y_asset,
+        max_width=width - 1.5 * inch,
+        bottom_margin=0.7 * inch,
+        font_size=6,
+        page_title="YTD Summary by Asset",
+    )
+    c.showPage()
 
     # ---------------------------------------------------
-    # 5) TRANSACTIONS — FILTERED DETAIL
+    # 5) TRANSACTIONS — FILTERED DETAIL  (paged)
     # ---------------------------------------------------
     c.setPageSize(landscape(letter))
     width, height = landscape(letter)
     _title("Transactions — Filtered Detail", height - 0.7 * inch, 18)
     c.setFont("Helvetica", 9)
 
-    base_tx = df_tx_scoped.copy()
+    base_tx = df_tx_scoped.copy() if df_tx_scoped is not None else pd.DataFrame()
 
     col_in = _find(base_tx, "trans_in", "Trans In", "In")
     col_out = _find(base_tx, "trans_out", "Trans Out", "Out")
 
     rows_count = len(base_tx)
-    in_sum = out_sum = 0.0
-    # Find the cost column for IN/OUT/NET summary
+
     cost_col = _find(
         base_tx,
         "_COST", "Cost", "total_cost", "TOTAL COST",
         "Ext Cost", "Extended Cost", "Value",
     )
 
-    in_sum = 0.0
-    out_sum = 0.0
-
+    in_sum = out_sum = 0.0
     if cost_col and not base_tx.empty:
         in_mask_win = _truthy_mask(
             base_tx[col_in] if (col_in and col_in in base_tx.columns) else None,
@@ -2030,19 +1986,10 @@ def build_reporting_hub_pdf(
             base_tx.index,
         )
 
-        in_sum = float(
-            pd.to_numeric(base_tx.loc[in_mask_win, cost_col], errors="coerce")
-            .fillna(0)
-            .sum()
-        )
-        out_sum = float(
-            pd.to_numeric(base_tx.loc[out_mask_win, cost_col], errors="coerce")
-            .fillna(0)
-            .sum()
-        )
+        in_sum = float(pd.to_numeric(base_tx.loc[in_mask_win, cost_col], errors="coerce").fillna(0).sum())
+        out_sum = float(pd.to_numeric(base_tx.loc[out_mask_win, cost_col], errors="coerce").fillna(0).sum())
 
     net_sum = in_sum + out_sum
-
 
     c.drawString(0.75 * inch, height - 1.3 * inch, f"Rows: {rows_count:,}")
     c.drawString(3.0 * inch, height - 1.3 * inch, f"IN $ (window): ${in_sum:,.2f}")
@@ -2051,7 +1998,6 @@ def build_reporting_hub_pdf(
 
     # Trim some columns to shorten the Transactions table
     if not base_tx.empty:
-        # Case-insensitive drop for common names
         drop_targets = [
             "part type",
             "unit cost",
@@ -2067,48 +2013,43 @@ def build_reporting_hub_pdf(
         if cols_to_drop:
             base_tx = base_tx.drop(columns=cols_to_drop, errors="ignore")
 
-        top_y = height - 1.8 * inch
+    top_y = height - 1.8 * inch
 
-        MAX_ROWS_PER_PAGE = 13  # <-- tune this as needed (does NOT count header)
+    MAX_TX_ROWS_PER_PAGE = 18  # <--- your target (does NOT count header)
 
-        if base_tx is None or base_tx.empty:
-            c.drawString(0.75 * inch, top_y, "No transactions in this window.")
-        else:
-            # Ensure stable index for slicing
-            base_tx = base_tx.reset_index(drop=True)
-
-            total_rows = len(base_tx)
-            start_i = 0
-            page_n = 1
-
-            while start_i < total_rows:
-                chunk = base_tx.iloc[start_i:start_i + MAX_ROWS_PER_PAGE].copy()
-
-                # Draw chunk on current page
-                _draw_table_paged(
-                    chunk,
-                    x=0.5 * inch,
-                    top_y=top_y,
-                    max_width=width - 1.0 * inch,
-                    bottom_margin=0.7 * inch,
-                    font_size=6,
-                    page_title=f"Transactions — Filtered Detail (p{page_n})",
-                )
-
-                start_i += MAX_ROWS_PER_PAGE
-                page_n += 1
-
-                # Only advance page if there is more to draw
-                if start_i < total_rows:
-                    c.showPage()
-                    c.setPageSize(landscape(letter))
-                    width, height = landscape(letter)
-                    _title("Transactions — Filtered Detail (cont.)", height - 0.7 * inch, 18)
-                    c.setFont("Helvetica", 9)
-
-        # Finish this section cleanly
+    if base_tx is None or base_tx.empty:
+        c.drawString(0.75 * inch, top_y, "No transactions in this window.")
         c.showPage()
+    else:
+        base_tx = base_tx.reset_index(drop=True)
+        total_rows = len(base_tx)
+        start_i = 0
+        page_n = 1
 
+        while start_i < total_rows:
+            chunk = base_tx.iloc[start_i:start_i + MAX_TX_ROWS_PER_PAGE].copy()
+
+            _draw_table_paged(
+                chunk,
+                x=0.5 * inch,
+                top_y=top_y,
+                max_width=width - 1.0 * inch,
+                bottom_margin=0.7 * inch,
+                font_size=6,
+                page_title=f"Transactions — Filtered Detail (p{page_n})",
+            )
+
+            start_i += MAX_TX_ROWS_PER_PAGE
+            page_n += 1
+
+            if start_i < total_rows:
+                c.showPage()
+                c.setPageSize(landscape(letter))
+                width, height = landscape(letter)
+                _title("Transactions — Filtered Detail (cont.)", height - 0.7 * inch, 18)
+                c.setFont("Helvetica", 9)
+
+        c.showPage()
 
     # ---------------------------------------------------
     # 6) WORK ORDERS — KPI PAGES (one per table)
@@ -2137,6 +2078,7 @@ def build_reporting_hub_pdf(
         c.drawString(0.75 * inch, height - 1.3 * inch, line)
 
         tbl_df = wo_tables.get(tbl_key, pd.DataFrame())
+
         # For Completed Overdue, force filter by Completed On within the main date range
         if label == "Completed Overdue" and start_date and end_date and not tbl_df.empty:
             col_done = _find(tbl_df, "Completed On", "Completed on", "Completed Date", "Date Completed")
@@ -2147,16 +2089,16 @@ def build_reporting_hub_pdf(
                     (tbl_df[col_done] <= pd.to_datetime(end_date))
                 )
                 tbl_df = tbl_df.loc[mask].reset_index(drop=True)
-                # Drop helper/technical columns so the WO tables are cleaner
+
+        # Drop helper/technical columns so the WO tables are cleaner
         if not tbl_df.empty:
             helper_names = {
                 "IsOverDue", "IsOverdue", "IsComingDue",
                 "IsOpen", "IsCompleted",
                 "DaysOverDue", "DaysOverdue", "Days Overdue",
                 "DueBucket", "Bucket",
-                "ComOverDue",  # 👈 drop this helper too
+                "ComOverDue",
             }
-
             clean_cols = []
             for col in tbl_df.columns:
                 if str(col).startswith("_"):
@@ -2167,49 +2109,17 @@ def build_reporting_hub_pdf(
             if clean_cols:
                 tbl_df = tbl_df[clean_cols]
 
-
         top_y = height - 1.8 * inch
-
-        MAX_ROWS_PER_PAGE = 13  # <-- tune this as needed (does NOT count header)
-
-        if base_tx is None or base_tx.empty:
-            c.drawString(0.75 * inch, top_y, "No transactions in this window.")
-        else:
-            # Ensure stable index for slicing
-            base_tx = base_tx.reset_index(drop=True)
-
-            total_rows = len(base_tx)
-            start_i = 0
-            page_n = 1
-
-            while start_i < total_rows:
-                chunk = base_tx.iloc[start_i:start_i + MAX_ROWS_PER_PAGE].copy()
-
-                # Draw chunk on current page
-                _draw_table_paged(
-                    chunk,
-                    x=0.5 * inch,
-                    top_y=top_y,
-                    max_width=width - 1.0 * inch,
-                    bottom_margin=0.7 * inch,
-                    font_size=6,
-                    page_title=f"Transactions — Filtered Detail (p{page_n})",
-                )
-
-                start_i += MAX_ROWS_PER_PAGE
-                page_n += 1
-
-                # Only advance page if there is more to draw
-                if start_i < total_rows:
-                    c.showPage()
-                    c.setPageSize(landscape(letter))
-                    width, height = landscape(letter)
-                    _title("Transactions — Filtered Detail (cont.)", height - 0.7 * inch, 18)
-                    c.setFont("Helvetica", 9)
-
-        # Finish this section cleanly
+        _draw_table_paged(
+            tbl_df,
+            x=0.5 * inch,
+            top_y=top_y,
+            max_width=width - 1.0 * inch,
+            bottom_margin=0.7 * inch,
+            font_size=6,
+            page_title="Work Orders — " + label,
+        )
         c.showPage()
-
 
     # ---------------------------------------------------
     # 7) SERVICES / EXPECTED — All + KPI PAGES
@@ -2231,7 +2141,6 @@ def build_reporting_hub_pdf(
         # No Expected data — skip Expected pages, but DO NOT return
         df_expected = pd.DataFrame()
 
-
     # ---- Build a slim Expected matrix similar to the page view ----
     dfE = df_expected.copy()
 
@@ -2250,9 +2159,7 @@ def build_reporting_hub_pdf(
     col_status     = "Status" if "Status" in dfE.columns else None
     col_meter      = _pick_col(dfE, ["Meter Type", "MeterType", "Meter"])
     col_ser        = _pick_col(dfE, ["SerType", "Service Type", "Type"])
-    # This is usually the "as-of" or last service date
     col_date       = _pick_col(dfE, ["Date", "Date of Last service", "Last Service Date"])
-    # Explicit due date for Expected/Overdue rows
     col_due        = _pick_col(dfE, ["DueDate", "Due Date", "Next Due", "Next Service Date"])
     col_next       = _pick_col(dfE, ["Next Service", "NextService", "Next Service Due"])
     col_hours      = _pick_col(dfE, ["Hours", "Meter Reading", "Current Reading"])
@@ -2263,7 +2170,6 @@ def build_reporting_hub_pdf(
     col_needs_serv = _pick_col(dfE, ["NeedsService", "Needs Service"])
     col_new_read   = _pick_col(dfE, ["NewReadingNeeded", "New Reading Needed"])
 
-    # This drives both the "All Assets" view and the status-specific tables
     exp_disp_cols: list[tuple[str, str | None]] = [
         ("Asset", col_asset),
         ("Location", col_loc),
@@ -2271,26 +2177,24 @@ def build_reporting_hub_pdf(
         ("Meter Type", col_meter),
         ("SerType", col_ser),
         ("Date", col_date),
-        ("DueDate", col_due),        # 👈 explicit due date
+        ("DueDate", col_due),
         ("Next Service", col_next),
         ("Hours", col_hours),
         ("Interval", col_interval),
         ("InDate", col_in_date),
         ("IsOverDue", col_is_overdue),
-        ("Remaining", col_remaining),  # 👈 remaining (for overdue esp.)
+        ("Remaining", col_remaining),
         ("NeedsService", col_needs_serv),
         ("NewReadingNeeded", col_new_read),
     ]
-
 
     cols_final = [lab for lab, src in exp_disp_cols if src is not None]
     exp_slim = pd.DataFrame(index=dfE.index)
     for lab, src in exp_disp_cols:
         if src is not None and src in dfE.columns:
             exp_slim[lab] = dfE[src]
-    exp_slim = exp_slim[cols_final]
+    exp_slim = exp_slim[cols_final] if cols_final else exp_slim
 
-    # Coerce date-ish column just for display
     if "Date" in exp_slim.columns:
         s = pd.to_datetime(exp_slim["Date"], errors="coerce")
         exp_slim["Date"] = s.dt.date.where(~s.isna(), exp_slim["Date"])
@@ -2315,7 +2219,6 @@ def build_reporting_hub_pdf(
 
     c.showPage()
 
-    # Build status-based tables including "Expected" (coming due)
     exp_tables: Dict[str, pd.DataFrame] = {}
     if "Status" in dfE.columns:
         tmp = dfE.copy()
@@ -2329,10 +2232,7 @@ def build_reporting_hub_pdf(
             sub = tmp[tmp["_status_cf"] == label].drop(columns=["_status_cf"])
             if not sub.empty:
                 exp_tables[key] = sub.reset_index(drop=True)
-    else:
-        exp_tables = {}
 
-    # Helper to build a slim view for a given status table
     def _expected_slim(tbl: pd.DataFrame) -> pd.DataFrame:
         if tbl is None or tbl.empty:
             return pd.DataFrame(columns=cols_final)
@@ -2340,7 +2240,7 @@ def build_reporting_hub_pdf(
         for lab, src in exp_disp_cols:
             if src is not None and src in tbl.columns:
                 out[lab] = tbl[src]
-        out = out[cols_final]
+        out = out[cols_final] if cols_final else out
         if "Date" in out.columns:
             s = pd.to_datetime(out["Date"], errors="coerce")
             out["Date"] = s.dt.date.where(~s.isna(), out["Date"])
@@ -2362,16 +2262,9 @@ def build_reporting_hub_pdf(
         _title("Expected Services — " + label, height - 0.7 * inch, 18)
         c.setFont("Helvetica", 9)
 
-        if kpi_key:
-            count_val = exp_kpis.get(kpi_key, 0)
-        else:
-            count_val = len(tbl_df)
+        count_val = exp_kpis.get(kpi_key, 0) if kpi_key else len(tbl_df)
 
-        c.drawString(
-            0.75 * inch,
-            height - 1.3 * inch,
-            f"Count: {int(count_val):,}",
-        )
+        c.drawString(0.75 * inch, height - 1.3 * inch, f"Count: {int(count_val):,}")
 
         top_y = height - 1.8 * inch
         _draw_table_paged(
