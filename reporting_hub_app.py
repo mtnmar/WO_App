@@ -7755,7 +7755,7 @@ elif current_page == "📄 PDF Report":
         end_date,
         ["DueDate", "Expected Date", "Date"],
     )
-filtered_dfs_pdf = {
+    filtered_dfs_pdf = {
         "workorders": df_wo_pdf,
         "costs_trends": df_costs_pdf,
         "parts": df_parts_pdf,
