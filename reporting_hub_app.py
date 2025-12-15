@@ -1894,6 +1894,7 @@ else:
 
     # ---------------------------------------------------
     # 3b) YTD SUMMARY BY ASSET — OWN PAGE (Workorders only)
+    #     Column order: YTD Total, current month, previous month, ...
     # ---------------------------------------------------
     c.setPageSize(landscape(letter))
     width, height = landscape(letter)
@@ -1904,37 +1905,48 @@ else:
     df_asset = pd.DataFrame()
 
     if (df_ytd is not None) and (not df_ytd.empty) and asset_col:
+        # Build base table (Asset, Month, Cost)
         t2 = df_ytd[[asset_col, "__pdf_cost"]].copy()
-        t2["__Month"] = pd.to_datetime(df_ytd[date_col], errors="coerce").dt.month if date_col else np.nan
-
-        if "_tx_ytd_pivot" in globals():
-            df_asset = _tx_ytd_pivot(t2, asset_col, "__pdf_cost")
+        if date_col:
+            t2["__Month"] = pd.to_datetime(df_ytd[date_col], errors="coerce").dt.month
         else:
-            p2 = t2.pivot_table(
-                index=asset_col,
-                columns="__Month",
-                values="__pdf_cost",
-                aggfunc="sum",
-                fill_value=0.0,
-            )
-            for m in range(1, 13):
-                if m not in p2.columns:
-                    p2[m] = 0.0
-            p2 = p2[[m for m in range(1, 13)]]
-            p2["YTD Total"] = p2.sum(axis=1)
-            p2 = p2.reset_index()
-            month_names = {
-                1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
-                7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
-            }
-            df_asset = p2.rename(columns=month_names)
+            t2["__Month"] = np.nan
 
-    # ✅ FORCE correct order: highest YTD cost → lowest (BEFORE currency formatting)
-    if df_asset is not None and not df_asset.empty and "YTD Total" in df_asset.columns:
-        y = pd.to_numeric(df_asset["YTD Total"], errors="coerce").fillna(0.0)
-        df_asset = df_asset.loc[y.sort_values(ascending=False).index].reset_index(drop=True)
+        # Pivot to Jan..Dec columns + YTD Total
+        p2 = t2.pivot_table(
+            index=asset_col,
+            columns="__Month",
+            values="__pdf_cost",
+            aggfunc="sum",
+            fill_value=0.0
+        )
 
-    # Format AFTER sorting
+        # Ensure month columns 1..12 exist
+        for m in range(1, 13):
+            if m not in p2.columns:
+                p2[m] = 0.0
+        p2 = p2[[m for m in range(1, 13)]]
+
+        # Add YTD Total, reset index, rename month numbers -> abbreviations
+        p2["YTD Total"] = p2.sum(axis=1)
+        p2 = p2.reset_index()
+
+        month_names = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
+        p2 = p2.rename(columns=month_names)
+
+        # Sort by YTD Total (HIGH -> LOW)
+        p2["YTD Total"] = pd.to_numeric(p2["YTD Total"], errors="coerce").fillna(0.0)
+        p2 = p2.sort_values("YTD Total", ascending=False)
+
+        # Reorder columns: Asset, YTD Total, current month, previous month, ... (wrap)
+        cur_m = int(end_date.month) if end_date else 12
+        month_cycle = [month_names[m] for m in range(cur_m, 0, -1)] + [month_names[m] for m in range(12, cur_m, -1)]
+        month_cols = [m for m in month_cycle if m in p2.columns]
+
+        ordered_cols = [asset_col, "YTD Total"] + month_cols
+        df_asset = p2[ordered_cols].copy()
+
+    # Format
     if df_asset is not None and not df_asset.empty:
         df_asset = _fmt_currency(df_asset, skip_first=True)
 
@@ -2127,7 +2139,7 @@ else:
 
     if df_expected is None or df_expected.empty:
         c.save()
-    return buf.getvalue()
+        return buf.getvalue()
 
     # ---- Build a slim Expected matrix similar to the page view ----
     dfE = df_expected.copy()
