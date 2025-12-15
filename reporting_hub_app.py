@@ -2112,7 +2112,7 @@ def build_reporting_hub_pdf(
 
         top_y = height - 1.8 * inch
 
-        MAX_ROWS_PER_PAGE = 15  # <-- tune this as needed (does NOT count header)
+        MAX_ROWS_PER_PAGE = 13  # <-- tune this as needed (does NOT count header)
 
         if base_tx is None or base_tx.empty:
             c.drawString(0.75 * inch, top_y, "No transactions in this window.")
