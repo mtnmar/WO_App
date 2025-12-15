@@ -2111,17 +2111,47 @@ def build_reporting_hub_pdf(
 
 
         top_y = height - 1.8 * inch
-        _draw_table_paged(
-            tbl_df,
-            x=0.5 * inch,
-            top_y=top_y,
-            max_width=width - 1.0 * inch,
-            bottom_margin=0.7 * inch,
-            font_size=6,
-            page_title="Work Orders — " + label,
-        )
 
+        MAX_ROWS_PER_PAGE = 18  # <-- tune this as needed (does NOT count header)
+
+        if base_tx is None or base_tx.empty:
+            c.drawString(0.75 * inch, top_y, "No transactions in this window.")
+        else:
+            # Ensure stable index for slicing
+            base_tx = base_tx.reset_index(drop=True)
+
+            total_rows = len(base_tx)
+            start_i = 0
+            page_n = 1
+
+            while start_i < total_rows:
+                chunk = base_tx.iloc[start_i:start_i + MAX_ROWS_PER_PAGE].copy()
+
+                # Draw chunk on current page
+                _draw_table_paged(
+                    chunk,
+                    x=0.5 * inch,
+                    top_y=top_y,
+                    max_width=width - 1.0 * inch,
+                    bottom_margin=0.7 * inch,
+                    font_size=6,
+                    page_title=f"Transactions — Filtered Detail (p{page_n})",
+                )
+
+                start_i += MAX_ROWS_PER_PAGE
+                page_n += 1
+
+                # Only advance page if there is more to draw
+                if start_i < total_rows:
+                    c.showPage()
+                    c.setPageSize(landscape(letter))
+                    width, height = landscape(letter)
+                    _title("Transactions — Filtered Detail (cont.)", height - 0.7 * inch, 18)
+                    c.setFont("Helvetica", 9)
+
+        # Finish this section cleanly
         c.showPage()
+
 
     # ---------------------------------------------------
     # 7) SERVICES / EXPECTED — All + KPI PAGES
