@@ -7678,16 +7678,20 @@ elif current_page == "📄 PDF Report":
     df_tx_pdf       = _filter_by_locations(df_tx_pdf, selected_locations)
     df_expected_pdf = _filter_by_locations(df_expected_pdf, selected_locations)
     
-    df_wo_pdf = df_costs_pdf.copy()
-
+    # df_costs_pdf is Workorders.parquet in your app (dfs["costs_trends"])
+    df_wo_pdf = df_costs_pdf.copy()  # <-- define it so "workorders" key exists
 
     filtered_dfs_pdf = {
         "workorders": df_wo_pdf,
-        "costs_trends": df_costs_pdf,     
+        "costs_trends": df_costs_pdf,
         "parts": df_parts_pdf,
         "transactions": df_tx_pdf,
         "expected": df_expected_pdf,
     }
+
+# Optional: quick sanity check so you can see it isn't blank
+st.caption(f"PDF inputs — workorders rows: {len(df_wo_pdf):,} • parts: {len(df_parts_pdf):,} • tx: {len(df_tx_pdf):,} • expected: {len(df_expected_pdf):,}")
+
 
 
 def _build_ytd_by_location_from_workorders(df_in: pd.DataFrame, year_i: int) -> pd.DataFrame:
