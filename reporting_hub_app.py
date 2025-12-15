@@ -1725,7 +1725,7 @@ def build_reporting_hub_pdf(
     c.setFont("Helvetica", 10)
 
     # Base DF from filtered_dfs (Workorders.parquet)
-    df_wo = filtered_dfs.get("workorders", pd.DataFrame()).copy()
+    df_wo = filtered_dfs.get("Workorders", pd.DataFrame()).copy()
 
     # --- Find key columns in Workorders ---
     loc_col_wo  = _find(df_wo, "Location", "Location2", "NS Location", "location")
