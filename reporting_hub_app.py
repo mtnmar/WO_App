@@ -1757,6 +1757,8 @@ def build_reporting_hub_pdf(
 
     # --- Apply location + date filters to Transactions for this report window ---
     df_tx_scoped = df_tx.copy()
+    df_tx_scoped[cost_col] = pd.to_numeric(df_tx_scoped[cost_col], errors="coerce").fillna(0.0)
+
 
     if loc_col_tx and locations:
         allowed_locs = {str(x).strip() for x in locations}
