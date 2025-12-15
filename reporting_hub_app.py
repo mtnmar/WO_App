@@ -7667,14 +7667,22 @@ elif current_page == "📄 PDF Report":
 
     def _build_ytd_by_location_from_workorders(df_in: pd.DataFrame, year_i: int) -> pd.DataFrame:
         import calendar
+        import pandas as pd
+
+        def _first_present_local(df: pd.DataFrame, candidates):
+            for c in candidates:
+                if c in df.columns:
+                    return c
+            return None
+
         if df_in is None or df_in.empty:
             return pd.DataFrame()
 
         dfw = df_in.copy()
 
         # detect columns (same candidates as the Costs & Trends tab)
-        date_col = _first_present(dfw, ["Completed on","COMPLETED ON","Completed On","Date","Service date","Created on","Due date","Started on"])
-        loc_col  = _first_present(dfw, ["Location","NS Location","location","Location2"])
+        date_col = _first_present_local(dfw, ["Completed on","COMPLETED ON","Completed On","Date","Service date","Created on","Created On","Due date","Started on"])
+        loc_col  = _first_present_local(dfw, ["Location","NS Location","location","Location2"])
         if not date_col or not loc_col:
             return pd.DataFrame()
 
@@ -7683,8 +7691,8 @@ elif current_page == "📄 PDF Report":
         def _num(s):
             return pd.to_numeric(s, errors="coerce").fillna(0.0)
 
-        item_col = _first_present(dfw, ["Total Item Cost","TOTAL ITEM COST","total item cost","item total","item_total","TotalItemCost"])
-        totl_col = _first_present(dfw, ["Total cost","Total Cost","TOTAL COST","total cost","cost total","cost_total","TotalCost"])
+        item_col = _first_present_local(dfw, ["Total Item Cost","TOTAL ITEM COST","total item cost","item total","item_total","TotalItemCost"])
+        totl_col = _first_present_local(dfw, ["Total cost","Total Cost","TOTAL COST","total cost","cost total","cost_total","TotalCost"])
 
         if item_col and totl_col:
             dfw["__cost_sum"] = (_num(dfw[item_col]) + _num(dfw[totl_col])).astype(float)
@@ -7720,6 +7728,7 @@ elif current_page == "📄 PDF Report":
         pv = pv[ordered_cols].sort_values("YTD Total", ascending=False)
 
         return pv
+
 
     # ---------- base frames from dfs ----------
     # Workorders.parquet lives in dfs["costs_trends"] in your app
