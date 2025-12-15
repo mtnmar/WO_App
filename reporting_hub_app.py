@@ -7701,8 +7701,8 @@ elif current_page == "📄 PDF Report":
         elif "__cost" in dfw.columns:
             cost_col = "__cost"
         else:
-            item_col = _first_present(dfw, ["Total Item Cost","total item cost","item total","item_total","TotalItemCost"])
-            totl_col = _first_present(dfw, ["Total Cost","total cost","cost total","cost_total","TotalCost"])
+            item_col = _first_present(dfw, ["TOTAL ITEM COST"])
+            totl_col = _first_present(dfw, ["Total cost"})
             item_cost = pd.to_numeric(dfw[item_col], errors="coerce").fillna(0.0) if item_col else 0.0
             totl_cost = pd.to_numeric(dfw[totl_col], errors="coerce").fillna(0.0) if totl_col else 0.0
             dfw["__cost"] = (item_cost + totl_cost).astype(float)
