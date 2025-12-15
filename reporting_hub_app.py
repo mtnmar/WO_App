@@ -2140,8 +2140,8 @@ def build_reporting_hub_pdf(
             ]
 
     if df_expected is None or df_expected.empty:
-        c.save()
-    return buf.getvalue()
+        # No Expected data — skip Expected pages, but DO NOT return
+        df_expected = pd.DataFrame()
 
 
     # ---- Build a slim Expected matrix similar to the page view ----
