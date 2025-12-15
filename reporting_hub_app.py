@@ -1878,50 +1878,64 @@ def build_reporting_hub_pdf(
         # finish the Costs & Trends summary page
         c.showPage()
 
-        # ---------------------------------------------------
-        # 3b) YTD SUMMARY BY ASSET — OWN PAGE (Workorders only)
-        # ---------------------------------------------------
-        c.setPageSize(landscape(letter))
-        width, height = landscape(letter)
-        _title("YTD Summary by Asset", height - 0.7 * inch, 18)
-        c.setFont("Helvetica", 10)
+    # ---------------------------------------------------
+    # 3b) YTD SUMMARY BY ASSET — OWN PAGE (Workorders only)
+    # ---------------------------------------------------
+    c.setPageSize(landscape(letter))
+    width, height = landscape(letter)
+    _title("YTD Summary by Asset", height - 0.7 * inch, 18)
+    c.setFont("Helvetica", 10)
 
-        asset_col = _find(df_ytd, "Asset", "Asset Name", "Name", "Equipment", "Equipment #", "Equipment")
-        df_asset = pd.DataFrame()
+    asset_col = _find(df_ytd, "Asset", "Asset Name", "Name", "Equipment", "Equipment #", "Equipment")
+    df_asset = pd.DataFrame()
 
-        if (df_ytd is not None) and (not df_ytd.empty) and asset_col:
-            t2 = df_ytd[[asset_col, "__pdf_cost"]].copy()
-            t2["__Month"] = pd.to_datetime(df_ytd[date_col], errors="coerce").dt.month if date_col else np.nan
+    if (df_ytd is not None) and (not df_ytd.empty) and asset_col:
+        t2 = df_ytd[[asset_col, "__pdf_cost"]].copy()
+        t2["__Month"] = pd.to_datetime(df_ytd[date_col], errors="coerce").dt.month if date_col else np.nan
 
-            if "_tx_ytd_pivot" in globals():
-                df_asset = _tx_ytd_pivot(t2, asset_col, "__pdf_cost")
-            else:
-                p2 = t2.pivot_table(index=asset_col, columns="__Month", values="__pdf_cost",
-                                    aggfunc="sum", fill_value=0.0)
-                for m in range(1, 13):
-                    if m not in p2.columns:
-                        p2[m] = 0.0
-                p2 = p2[[m for m in range(1, 13)]]
-                p2["YTD Total"] = p2.sum(axis=1)
-                p2 = p2.reset_index()
-                month_names = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
-                df_asset = p2.rename(columns=month_names)
+        if "_tx_ytd_pivot" in globals():
+            df_asset = _tx_ytd_pivot(t2, asset_col, "__pdf_cost")
+        else:
+            p2 = t2.pivot_table(
+                index=asset_col,
+                columns="__Month",
+                values="__pdf_cost",
+                aggfunc="sum",
+                fill_value=0.0,
+            )
+            for m in range(1, 13):
+                if m not in p2.columns:
+                    p2[m] = 0.0
+            p2 = p2[[m for m in range(1, 13)]]
+            p2["YTD Total"] = p2.sum(axis=1)
+            p2 = p2.reset_index()
+            month_names = {
+                1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+                7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
+            }
+            df_asset = p2.rename(columns=month_names)
 
-        if df_asset is not None and not df_asset.empty:
-            df_asset = _fmt_currency(df_asset, skip_first=True)
+    # ✅ FORCE correct order: highest YTD cost → lowest (BEFORE currency formatting)
+    if df_asset is not None and not df_asset.empty and "YTD Total" in df_asset.columns:
+        y = pd.to_numeric(df_asset["YTD Total"], errors="coerce").fillna(0.0)
+        df_asset = df_asset.loc[y.sort_values(ascending=False).index].reset_index(drop=True)
 
-        top_y_asset = height - 1.8 * inch
-        _draw_table_paged(
-            df_asset,
-            x=0.75 * inch,
-            top_y=top_y_asset,
-            max_width=width - 1.5 * inch,
-            bottom_margin=0.7 * inch,
-            font_size=6,
-            page_title="YTD Summary by Asset",
-        )
+    # Format AFTER sorting
+    if df_asset is not None and not df_asset.empty:
+        df_asset = _fmt_currency(df_asset, skip_first=True)
 
-        c.showPage()
+    top_y_asset = height - 1.8 * inch
+    _draw_table_paged(
+        df_asset,
+        x=0.75 * inch,
+        top_y=top_y_asset,
+        max_width=width - 1.5 * inch,
+        bottom_margin=0.7 * inch,
+        font_size=6,
+        page_title="YTD Summary by Asset",
+    )
+
+    c.showPage()
 
 
     # ---------------------------------------------------
