@@ -7622,7 +7622,7 @@ elif current_page == "↕ Transactions":
 # --- Work Orders Report ---
 elif current_page == "🧾 Work Orders":
     render_wo_report(
-        df_wo=dfs.get("Workorders", pd.DataFrame()),
+        df_wo=dfs.get("workorders", pd.DataFrame()),
         start_date=start_date,
         end_date=end_date,
         selected_locations=selected_locations,
@@ -7665,100 +7665,80 @@ elif current_page == "📄 PDF Report":
         mask = s.dt.date.between(start, end)
         return df.loc[mask].copy()
 
+    def _build_ytd_by_location_from_workorders(df_in: pd.DataFrame, year_i: int) -> pd.DataFrame:
+        import calendar
+        if df_in is None or df_in.empty:
+            return pd.DataFrame()
+
+        dfw = df_in.copy()
+
+        # detect columns (same candidates as the Costs & Trends tab)
+        date_col = _first_present(dfw, ["Completed on","COMPLETED ON","Completed On","Date","Service date","Created on","Due date","Started on"])
+        loc_col  = _first_present(dfw, ["Location","NS Location","location","Location2"])
+        if not date_col or not loc_col:
+            return pd.DataFrame()
+
+        dfw[date_col] = pd.to_datetime(dfw[date_col], errors="coerce")
+
+        def _num(s):
+            return pd.to_numeric(s, errors="coerce").fillna(0.0)
+
+        item_col = _first_present(dfw, ["Total Item Cost","TOTAL ITEM COST","total item cost","item total","item_total","TotalItemCost"])
+        totl_col = _first_present(dfw, ["Total cost","Total Cost","TOTAL COST","total cost","cost total","cost_total","TotalCost"])
+
+        if item_col and totl_col:
+            dfw["__cost_sum"] = (_num(dfw[item_col]) + _num(dfw[totl_col])).astype(float)
+            cost_col = "__cost_sum"
+        elif "_Cost" in dfw.columns:
+            cost_col = "_Cost"
+        elif "__cost" in dfw.columns:
+            cost_col = "__cost"
+        else:
+            dfw["__cost"] = (_num(dfw[item_col]) if item_col else 0.0) + (_num(dfw[totl_col]) if totl_col else 0.0)
+            cost_col = "__cost"
+
+        dfw[cost_col] = pd.to_numeric(dfw[cost_col], errors="coerce").fillna(0.0)
+
+        # year scope
+        dfw = dfw[dfw[date_col].dt.year == year_i].copy()
+        if dfw.empty:
+            return pd.DataFrame()
+
+        dfw["__Month"] = dfw[date_col].dt.month
+
+        g = dfw.groupby([loc_col, "__Month"], as_index=False)[cost_col].sum()
+        g["Mon"] = g["__Month"].map(lambda m: calendar.month_abbr[int(m)] if pd.notna(m) else "")
+        pv = g.pivot(index=loc_col, columns="Mon", values=cost_col).reset_index()
+
+        mon_desc = [calendar.month_abbr[m] for m in range(12, 0, -1)]
+        month_cols = [c for c in mon_desc if c in pv.columns]
+        for c in month_cols:
+            pv[c] = pd.to_numeric(pv[c], errors="coerce").fillna(0.0)
+
+        pv["YTD Total"] = pv[month_cols].sum(axis=1, skipna=True)
+        ordered_cols = [loc_col, "YTD Total"] + month_cols
+        pv = pv[ordered_cols].sort_values("YTD Total", ascending=False)
+
+        return pv
+
     # ---------- base frames from dfs ----------
     # Workorders.parquet lives in dfs["costs_trends"] in your app
-    df_costs_pdf = dfs.get("costs_trends", pd.DataFrame())
+    df_wo_pdf = dfs.get("costs_trends", pd.DataFrame())
     df_parts_pdf = dfs.get("parts", pd.DataFrame())
     df_tx_pdf    = dfs.get("transactions", pd.DataFrame())
     df_expected_pdf = dfs.get("expected", pd.DataFrame())
 
     # ---------- apply *location* filter ----------
-    df_costs_pdf    = _filter_by_locations(df_costs_pdf, selected_locations)
+    df_wo_pdf       = _filter_by_locations(df_wo_pdf, selected_locations)
     df_parts_pdf    = _filter_by_locations(df_parts_pdf, selected_locations)
     df_tx_pdf       = _filter_by_locations(df_tx_pdf, selected_locations)
     df_expected_pdf = _filter_by_locations(df_expected_pdf, selected_locations)
-    
-    # df_costs_pdf is Workorders.parquet in your app (dfs["costs_trends"])
-    df_wo_pdf = df_costs_pdf.copy()  # <-- define it so "workorders" key exists
 
-    filtered_dfs_pdf = {
-        "workorders": df_wo_pdf,
-        "costs_trends": df_costs_pdf,
-        "parts": df_parts_pdf,
-        "transactions": df_tx_pdf,
-        "expected": df_expected_pdf,
-    }
-
-# Optional: quick sanity check so you can see it isn't blank
-st.caption(f"PDF inputs — workorders rows: {len(df_wo_pdf):,} • parts: {len(df_parts_pdf):,} • tx: {len(df_tx_pdf):,} • expected: {len(df_expected_pdf):,}")
-
-
-
-def _build_ytd_by_location_from_workorders(df_in: pd.DataFrame, year_i: int) -> pd.DataFrame:
-    import calendar
-    if df_in is None or df_in.empty:
-        return pd.DataFrame()
-
-    dfw = df_in.copy()
-
-    # detect columns (same candidates as the Costs & Trends tab)
-    date_col = _first_present(dfw, ["Completed on","COMPLETED ON","Completed On","Date","Service date","Created on","Due date","Started on"])
-    loc_col  = _first_present(dfw, ["Location","NS Location","location","Location2"])
-    if not date_col or not loc_col:
-        return pd.DataFrame()
-
-    dfw[date_col] = pd.to_datetime(dfw[date_col], errors="coerce")
-
-    # Cost column preference:
-    # 1) Total Item Cost + Total cost
-    # 2) _Cost
-    # 3) __cost
-    def _num(s):
-        return pd.to_numeric(s, errors="coerce").fillna(0.0)
-
-    item_col = _first_present(dfw, ["Total Item Cost","TOTAL ITEM COST","total item cost","item total","item_total","TotalItemCost"])
-    totl_col = _first_present(dfw, ["Total cost","Total Cost","TOTAL COST","total cost","cost total","cost_total","TotalCost"])
-
-    if item_col and totl_col:
-        dfw["__cost_sum"] = (_num(dfw[item_col]) + _num(dfw[totl_col])).astype(float)
-        cost_col = "__cost_sum"
-    elif "_Cost" in dfw.columns:
-        cost_col = "_Cost"
-    elif "__cost" in dfw.columns:
-        cost_col = "__cost"
-    else:
-        dfw["__cost"] = (_num(dfw[item_col]) if item_col else 0.0) + (_num(dfw[totl_col]) if totl_col else 0.0)
-        cost_col = "__cost"
-
-    dfw[cost_col] = pd.to_numeric(dfw[cost_col], errors="coerce").fillna(0.0)
-
-    # year scope
-    dfw = dfw[dfw[date_col].dt.year == year_i].copy()
-    if dfw.empty:
-        return pd.DataFrame()
-
-    dfw["__Month"] = dfw[date_col].dt.month
-
-    g = dfw.groupby([loc_col, "__Month"], as_index=False)[cost_col].sum()
-    g["Mon"] = g["__Month"].map(lambda m: calendar.month_abbr[int(m)] if pd.notna(m) else "")
-    pv = g.pivot(index=loc_col, columns="Mon", values=cost_col).reset_index()
-
-    mon_desc = [calendar.month_abbr[m] for m in range(12, 0, -1)]
-    month_cols = [c for c in mon_desc if c in pv.columns]
-    for c in month_cols:
-        pv[c] = pd.to_numeric(pv[c], errors="coerce").fillna(0.0)
-
-    pv["YTD Total"] = pv[month_cols].sum(axis=1, skipna=True)
-    ordered_cols = [loc_col, "YTD Total"] + month_cols
-    pv = pv[ordered_cols].sort_values("YTD Total", ascending=False)
-
-    return pv
-
-
+    # ---------- build Costs table for PDF (YTD by location) ----------
     year_i = int(end_date.year) if end_date else int(date.today().year)
     df_costs_pdf = _build_ytd_by_location_from_workorders(df_wo_pdf, year_i)
 
-    # Cache for other PDF pages (asset page uses session_state in build_reporting_hub_pdf)
+    # cache (optional)
     try:
         st.session_state["rhub_costs_ytd_loc"] = df_costs_pdf.copy() if df_costs_pdf is not None else pd.DataFrame()
     except Exception:
@@ -7778,14 +7758,16 @@ def _build_ytd_by_location_from_workorders(df_in: pd.DataFrame, year_i: int) -> 
         end_date,
         ["DueDate", "Expected Date", "Date"],
     )
+
     filtered_dfs_pdf = {
-        "workorders": df_wo_pdf,
-        "costs_trends": df_costs_pdf,
+        "workorders": df_wo_pdf,          # raw Workorders rows (Workorders.parquet)
+        "costs_trends": df_costs_pdf,     # pivot table YTD by location
         "parts": df_parts_pdf,
         "transactions": df_tx_pdf,
         "expected": df_expected_pdf,
     }
 
+    st.caption(f"PDF inputs — workorders rows: {len(df_wo_pdf):,} • parts: {len(df_parts_pdf):,} • tx: {len(df_tx_pdf):,} • expected: {len(df_expected_pdf):,}")
     st.caption("PDF uses the current Reporting Window + selected Locations.")
 
     if st.button("Generate PDF report", type="primary"):
