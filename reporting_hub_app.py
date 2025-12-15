@@ -1746,8 +1746,8 @@ def build_reporting_hub_pdf(
             "Ext Cost", "Extended Cost", "Value",
         )
 
-    loc_col_tx = _find(df_tx, "Location", "Location2", "loc", "NS Location")
-    date_col_tx = _find(df_tx, "Completed On", "Completed on", "Date", "TransDate", "Created On")
+    loc_col_tx = _find(df_tx, "Location")
+    date_col_tx = _find(df_tx, "COMPLETED ON")
 
     # Safety: if we still didn't find a cost column, create zeros so we don't crash
     if not cost_col:
