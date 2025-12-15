@@ -1740,7 +1740,8 @@ def build_reporting_hub_pdf(
         return pd.DataFrame()
 
     # Base DF should be Workorders.parquet via the app's "costs_trends" dataset key
-    df_wo = filtered_dfs.get("costs_trends", pd.DataFrame()).copy()
+    df_wo = filtered_dfs.get("workorders", pd.DataFrame()).copy()
+
 
     # last resort: session cache (only if present)
     if (df_wo is None) or df_wo.empty:
@@ -7678,79 +7679,74 @@ elif current_page == "📄 PDF Report":
     df_expected_pdf = _filter_by_locations(df_expected_pdf, selected_locations)
 
     filtered_dfs_pdf = {
-        "costs_trends": df_costs_pdf,     # <-- THIS is Workorders.parquet
+        "workorders": df_wo_pdf,
+        "costs_trends": df_costs_pdf,     
         "parts": df_parts_pdf,
         "transactions": df_tx_pdf,
         "expected": df_expected_pdf,
     }
 
 
-    # ---------- build Costs & Trends table: YTD Summary by Location ----------
-    def _first_present(df: pd.DataFrame, candidates: list[str]) -> str | None:
-        for c in candidates:
-            if c in df.columns:
-                return c
-        return None
+def _build_ytd_by_location_from_workorders(df_in: pd.DataFrame, year_i: int) -> pd.DataFrame:
+    import calendar
+    if df_in is None or df_in.empty:
+        return pd.DataFrame()
 
-    def _build_ytd_by_location_from_workorders(df_in: pd.DataFrame, year_i: int) -> pd.DataFrame:
-        import calendar
-        if df_in is None or df_in.empty:
-            return pd.DataFrame()
+    dfw = df_in.copy()
 
-        dfw = df_in.copy()
+    # detect columns (same candidates as the Costs & Trends tab)
+    date_col = _first_present(dfw, ["Completed on","COMPLETED ON","Completed On","Date","Service date","Created on","Due date","Started on"])
+    loc_col  = _first_present(dfw, ["Location","NS Location","location","Location2"])
+    if not date_col or not loc_col:
+        return pd.DataFrame()
 
-        # detect columns (same candidates as the Costs & Trends tab)
-        date_col = _first_present(dfw, ["Completed on","COMPLETED ON","Completed On","Date","Service date","Created on","Due date","Started on"])
-        loc_col  = _first_present(dfw, ["Location","NS Location","location","Location2"])
+    dfw[date_col] = pd.to_datetime(dfw[date_col], errors="coerce")
 
-        if not date_col or not loc_col:
-            return pd.DataFrame()
+    # Cost column preference:
+    # 1) Total Item Cost + Total cost
+    # 2) _Cost
+    # 3) __cost
+    def _num(s):
+        return pd.to_numeric(s, errors="coerce").fillna(0.0)
 
-        dfw[date_col] = pd.to_datetime(dfw[date_col], errors="coerce")
+    item_col = _first_present(dfw, ["Total Item Cost","TOTAL ITEM COST","total item cost","item total","item_total","TotalItemCost"])
+    totl_col = _first_present(dfw, ["Total cost","Total Cost","TOTAL COST","total cost","cost total","cost_total","TotalCost"])
 
-        # Cost column (FORCE: Total Item Cost + Total Cost when available)
-        def _num(s):
-            return pd.to_numeric(s, errors="coerce").fillna(0.0)
+    if item_col and totl_col:
+        dfw["__cost_sum"] = (_num(dfw[item_col]) + _num(dfw[totl_col])).astype(float)
+        cost_col = "__cost_sum"
+    elif "_Cost" in dfw.columns:
+        cost_col = "_Cost"
+    elif "__cost" in dfw.columns:
+        cost_col = "__cost"
+    else:
+        dfw["__cost"] = (_num(dfw[item_col]) if item_col else 0.0) + (_num(dfw[totl_col]) if totl_col else 0.0)
+        cost_col = "__cost"
 
-        item_col = _first_present(df, ["Total Item Cost","TOTAL ITEM COST","total item cost","item total","item_total","TotalItemCost"])
-        totl_col = _first_present(df, ["Total cost","Total Cost","TOTAL COST","total cost","cost total","cost_total","TotalCost"])
+    dfw[cost_col] = pd.to_numeric(dfw[cost_col], errors="coerce").fillna(0.0)
 
-        if item_col and totl_col:
-            df["__cost_sum"] = (_num(df[item_col]) + _num(df[totl_col])).astype(float)
-            cost_col = "__cost_sum"
-        elif "_Cost" in df.columns:
-            cost_col = "_Cost"
-        elif "__cost" in df.columns:
-            cost_col = "__cost"
-        else:
-            # last resort: try to build from whatever exists (may be zeros)
-            df["__cost"] = (_num(df[item_col]) if item_col else 0.0) + (_num(df[totl_col]) if totl_col else 0.0)
-            cost_col = "__cost"
+    # year scope
+    dfw = dfw[dfw[date_col].dt.year == year_i].copy()
+    if dfw.empty:
+        return pd.DataFrame()
 
-        df[cost_col] = pd.to_numeric(df[cost_col], errors="coerce").fillna(0.0)
+    dfw["__Month"] = dfw[date_col].dt.month
 
+    g = dfw.groupby([loc_col, "__Month"], as_index=False)[cost_col].sum()
+    g["Mon"] = g["__Month"].map(lambda m: calendar.month_abbr[int(m)] if pd.notna(m) else "")
+    pv = g.pivot(index=loc_col, columns="Mon", values=cost_col).reset_index()
 
-        # year scope = full Jan–Dec for the master year
-        dfw = dfw[dfw[date_col].dt.year == year_i].copy()
-        if dfw.empty:
-            return pd.DataFrame()
+    mon_desc = [calendar.month_abbr[m] for m in range(12, 0, -1)]
+    month_cols = [c for c in mon_desc if c in pv.columns]
+    for c in month_cols:
+        pv[c] = pd.to_numeric(pv[c], errors="coerce").fillna(0.0)
 
-        dfw["__Month"] = dfw[date_col].dt.month
+    pv["YTD Total"] = pv[month_cols].sum(axis=1, skipna=True)
+    ordered_cols = [loc_col, "YTD Total"] + month_cols
+    pv = pv[ordered_cols].sort_values("YTD Total", ascending=False)
 
-        g = dfw.groupby([loc_col, "__Month"], as_index=False)[cost_col].sum()
-        g["Mon"] = g["__Month"].map(lambda m: calendar.month_abbr[int(m)] if pd.notna(m) else "")
-        pv = g.pivot(index=loc_col, columns="Mon", values=cost_col).reset_index()
+    return pv
 
-        # order cols: Dec -> Jan
-        mon_desc = [calendar.month_abbr[m] for m in range(12, 0, -1)]
-        month_cols = [c for c in mon_desc if c in pv.columns]
-        for c in month_cols:
-            pv[c] = pd.to_numeric(pv[c], errors="coerce").fillna(0.0)
-
-        pv["YTD Total"] = pv[month_cols].sum(axis=1, skipna=True)
-        ordered_cols = [loc_col, "YTD Total"] + month_cols
-        pv = pv[ordered_cols].sort_values("YTD Total", ascending=False)
-        return pv
 
     year_i = int(end_date.year) if end_date else int(date.today().year)
     df_costs_pdf = _build_ytd_by_location_from_workorders(df_wo_pdf, year_i)
