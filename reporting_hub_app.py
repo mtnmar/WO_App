@@ -1718,6 +1718,7 @@ def build_reporting_hub_pdf(
 
     # ---------------------------------------------------
     # 3) COSTS & TRENDS PAGE — Workorders ONLY (NO TX)
+    #    Cost = TOTAL ITEM COST + Total cost
     # ---------------------------------------------------
     c.setPageSize(landscape(letter))
     width, height = landscape(letter)
@@ -1725,34 +1726,52 @@ def build_reporting_hub_pdf(
     c.setFont("Helvetica", 10)
 
     # Base DF from filtered_dfs (Workorders.parquet)
-    df_wo = filtered_dfs.get("Workorders", pd.DataFrame()).copy()
+    # IMPORTANT: key is "workorders" (lowercase) in your pipeline
+    df_wo = filtered_dfs.get("workorders", pd.DataFrame()).copy()
+
+    # ---- Helper: normalized column finder (ignores case/spaces/_/punct) ----
+    def _norm_col(s: str) -> str:
+        return "".join(ch for ch in str(s).lower() if ch.isalnum())
+
+    def _find_norm(df: pd.DataFrame, *cands: str):
+        if df is None or df.empty:
+            return None
+        norm_map = {_norm_col(c): c for c in df.columns}
+        for cand in cands:
+            key = _norm_col(cand)
+            if key in norm_map:
+                return norm_map[key]
+        return None
+
+    def _num(s):
+        return pd.to_numeric(s, errors="coerce").fillna(0.0)
 
     # --- Find key columns in Workorders ---
     loc_col_wo  = _find(df_wo, "Location", "Location2", "NS Location", "location")
     date_col_wo = _find(df_wo, "Completed On", "Completed on", "Completed", "Date", "Service date", "Created On", "Created on")
-    item_col    = _find(df_wo, "TOTAL ITEM COST", "Total Item Cost", "total item cost", "TotalItemCost")
-    totl_col    = _find(df_wo, "Total cost", "Total Cost", "TOTAL COST", "total cost", "TotalCost")
 
-    # Require the known cost definition
-    if not item_col or not totl_col:
-        raise ValueError("Workorders cost columns not found: need 'TOTAL ITEM COST' and 'Total cost' (case-insensitive).")
+    # FORCE these two columns (robust match)
+    item_col = _find_norm(df_wo, "TOTAL ITEM COST", "Total Item Cost", "TotalItemCost", "TOTALITEMCOST")
+    totl_col = _find_norm(df_wo, "Total cost", "Total Cost", "TOTAL COST", "TotalCost", "TOTALCOST")
 
-    # Build true cost (no _Cost fallback)
-    df_wo["__pdf_cost"] = (
-        pd.to_numeric(df_wo[item_col], errors="coerce").fillna(0.0)
-        + pd.to_numeric(df_wo[totl_col], errors="coerce").fillna(0.0)
-    ).astype(float)
+    # If missing, don’t crash the whole report — render "n/a" tables instead
+    if df_wo is None or df_wo.empty or not item_col or not totl_col or not date_col_wo:
+        c.drawString(0.75 * inch, height - 1.3 * inch, "Costs & Trends: n/a (Workorders columns missing or empty)")
+        # Still create an empty YTD table so page renders
+        ytd_loc = pd.DataFrame()
+    else:
+        # Build true cost (no _Cost fallback)
+        df_wo["__pdf_cost"] = (_num(df_wo[item_col]) + _num(df_wo[totl_col])).astype(float)
 
-    # --- Apply location + date filters to Workorders for this report window ---
-    df_wo_scoped = df_wo.copy()
+        # --- Apply location + date filters to Workorders for this report window ---
+        df_wo_scoped = df_wo.copy()
 
-    if loc_col_wo and locations:
-        allowed_locs = {str(x).strip() for x in locations}
-        df_wo_scoped = df_wo_scoped[
-            df_wo_scoped[loc_col_wo].astype(str).str.strip().isin(allowed_locs)
-        ]
+        if loc_col_wo and locations:
+            allowed_locs = {str(x).strip() for x in locations}
+            df_wo_scoped = df_wo_scoped[
+                df_wo_scoped[loc_col_wo].astype(str).str.strip().isin(allowed_locs)
+            ]
 
-    if date_col_wo in df_wo_scoped.columns:
         df_wo_scoped[date_col_wo] = pd.to_datetime(df_wo_scoped[date_col_wo], errors="coerce")
         if start_date and end_date:
             df_wo_scoped = df_wo_scoped[
@@ -1760,125 +1779,73 @@ def build_reporting_hub_pdf(
                 (df_wo_scoped[date_col_wo] <= pd.to_datetime(end_date))
             ]
 
-    # From here on, use df_wo_scoped + "__pdf_cost" for totals/pivots
-    # Example:
-    # window_total = df_wo_scoped["__pdf_cost"].sum()
+        # --- Window & last-month totals from Workorders (NOT Transactions) ---
+        total_cost_window = float(df_wo_scoped["__pdf_cost"].sum()) if not df_wo_scoped.empty else 0.0
 
-     
-        # --- Build a YTD frame (Jan 1 -> end_date) for the same locations ---
-    df_tx_ytd = df_tx.copy()
-
-    if loc_col_tx and locations:
-        allowed_locs = {str(x).strip() for x in locations}
-        df_tx_ytd = df_tx_ytd[
-            df_tx_ytd[loc_col_tx].astype(str).str.strip().isin(allowed_locs)
-        ]
-
-    if date_col_tx in df_tx_ytd.columns and end_date:
-        df_tx_ytd[date_col_tx] = pd.to_datetime(df_tx_ytd[date_col_tx], errors="coerce")
-        year_start = datetime(end_date.year, 1, 1)
-        df_tx_ytd = df_tx_ytd[
-            (df_tx_ytd[date_col_tx] >= year_start) &
-            (df_tx_ytd[date_col_tx] <= pd.to_datetime(end_date))
-        ]
-
-    
-
-    # --- Window & last-month totals from Transactions ---
-    total_cost_window = 0.0
-    last_month_total = 0.0
-
-    if cost_col and not df_tx_scoped.empty:
-        df_tx_scoped[cost_col] = pd.to_numeric(df_tx_scoped[cost_col], errors="coerce")
-        total_cost_window = float(df_tx_scoped[cost_col].fillna(0).sum())
-
-        if end_date is not None and date_col_tx in df_tx_scoped.columns:
+        last_month_total = 0.0
+        if end_date is not None and not df_wo_scoped.empty:
             last_month_mask = (
-                (df_tx_scoped[date_col_tx].dt.year == end_date.year) &
-                (df_tx_scoped[date_col_tx].dt.month == end_date.month)
+                (df_wo_scoped[date_col_wo].dt.year == end_date.year) &
+                (df_wo_scoped[date_col_wo].dt.month == end_date.month)
             )
-            last_month_total = float(
-                df_tx_scoped.loc[last_month_mask, cost_col]
-                .fillna(0)
-                .sum()
+            last_month_total = float(df_wo_scoped.loc[last_month_mask, "__pdf_cost"].fillna(0).sum())
+
+        if total_cost_window:
+            label_total = "YTD total (window)" if (
+                start_date and end_date and
+                start_date.year == end_date.year and
+                start_date.month == 1 and
+                start_date.day == 1
+            ) else "Window total"
+            c.drawString(
+                0.75 * inch,
+                height - 1.3 * inch,
+                f"{label_total}: ${total_cost_window:,.2f}",
             )
-
-    if total_cost_window:
-        label_total = "YTD total (window)" if (
-            start_date and end_date and
-            start_date.year == end_date.year and
-            start_date.month == 1 and
-            start_date.day == 1
-        ) else "Window total"
-        c.drawString(
-            0.75 * inch,
-            height - 1.3 * inch,
-            f"{label_total}: ${total_cost_window:,.2f}",
-        )
-    else:
-        c.drawString(0.75 * inch, height - 1.3 * inch, "Window total: n/a")
-
-    if last_month_total:
-        c.drawString(
-            0.75 * inch,
-            height - 1.6 * inch,
-            f"Last month in window: ${last_month_total:,.2f}",
-        )
-
-    # --- YTD Summary by Location ---
-    # Prefer the *exact* YTD Summary by Location table from the Costs & Trends tab (or what the caller passes in),
-    # and only fall back to building YTD from Transactions if that table isn't available.
-    y_top = height - 2.1 * inch
-
-    # 1) Caller-provided table (PDF page passes this as filtered_dfs['costs_trends'])
-    df_costs_tbl = filtered_dfs.get("costs_trends", pd.DataFrame())
-
-    # 2) If not provided (or empty), try the in-app table cached in session_state
-    if df_costs_tbl is None or df_costs_tbl.empty:
-        try:
-            import streamlit as st
-            df_costs_tbl = st.session_state.get("rhub_costs_ytd_loc", pd.DataFrame())
-        except Exception:
-            df_costs_tbl = pd.DataFrame()
-
-    # 3) If we have the pivot table already, use it. Otherwise, attempt to build it from raw rows.
-    ytd_loc = pd.DataFrame()
-
-    if df_costs_tbl is not None and not df_costs_tbl.empty:
-        if "YTD Total" in df_costs_tbl.columns:
-            ytd_loc = df_costs_tbl.copy()
         else:
-            # Build a pivot similar to the Costs & Trends page
-            date_col_c = _find(df_costs_tbl, "Completed on", "Completed On", "COMPLETED ON", "Date", "Service date", "Created on")
-            loc_col_c  = _find(df_costs_tbl, "Location", "NS Location", "location", "Location2")
-            cost_col_c = _find(df_costs_tbl, "_Cost", "__cost", "_COST", "Cost", "Total cost", "Total Cost", "Ext Cost", "Extended Cost", "Value")
+            c.drawString(0.75 * inch, height - 1.3 * inch, "Window total: n/a")
 
-            if date_col_c and loc_col_c and cost_col_c:
-                tmp = df_costs_tbl.copy()
-                tmp[date_col_c] = pd.to_datetime(tmp[date_col_c], errors="coerce")
-                tmp[cost_col_c] = pd.to_numeric(tmp[cost_col_c], errors="coerce").fillna(0.0)
+        if last_month_total:
+            c.drawString(
+                0.75 * inch,
+                height - 1.6 * inch,
+                f"Last month in window: ${last_month_total:,.2f}",
+            )
 
-                # YTD frame: Jan 1 -> end_date for the same year
-                if end_date:
-                    y0 = datetime(end_date.year, 1, 1)
-                    tmp = tmp[(tmp[date_col_c] >= y0) & (tmp[date_col_c] <= pd.to_datetime(end_date))]
+        # --- YTD Summary by Location (Workorders ONLY) ---
+        # Build YTD frame: Jan 1 -> end_date for the same year + same locations
+        ytd_loc = pd.DataFrame()
 
-                tmp["__Month"] = tmp[date_col_c].dt.month
-                ytd_loc = _tx_ytd_pivot(tmp, loc_col_c, cost_col_c)
+        if end_date is not None and loc_col_wo:
+            tmp = df_wo.copy()
+            tmp[date_col_wo] = pd.to_datetime(tmp[date_col_wo], errors="coerce")
+            if "__pdf_cost" not in tmp.columns:
+                tmp["__pdf_cost"] = (_num(tmp[item_col]) + _num(tmp[totl_col])).astype(float)
 
-    # 4) Fallback: build true YTD from Transactions (legacy behavior)
-    if (ytd_loc is None or ytd_loc.empty) and loc_col_tx and cost_col and not df_tx_ytd.empty:
-        ytd_loc = _tx_ytd_pivot(df_tx_ytd, loc_col_tx, cost_col)
+            if locations:
+                allowed_locs = {str(x).strip() for x in locations}
+                tmp = tmp[tmp[loc_col_wo].astype(str).str.strip().isin(allowed_locs)]
 
-    # Currency format (skip first col = Location name)
-    if ytd_loc is not None and not ytd_loc.empty:
-        ytd_loc = _fmt_currency(ytd_loc, skip_first=True)
+            y0 = datetime(end_date.year, 1, 1)
+            tmp = tmp[(tmp[date_col_wo] >= y0) & (tmp[date_col_wo] <= pd.to_datetime(end_date))]
 
+            tmp["__Month"] = tmp[date_col_wo].dt.month
+
+            # uses your existing helper that creates the Dec..Jan pivot + YTD Total
+            ytd_loc = _tx_ytd_pivot(tmp, loc_col_wo, "__pdf_cost")
+
+        # Currency format (skip first col = Location name)
+        if ytd_loc is not None and not ytd_loc.empty:
+            ytd_loc = _fmt_currency(ytd_loc, skip_first=True)
+
+    # --- Draw YTD Summary by Location table ---
+    y_top = height - 2.1 * inch
     _sub("YTD Summary by Location", y_top, 12)
     y_loc = y_top - 0.3 * inch
     bottom_margin = 0.7 * inch
+
     _draw_table(
-        ytd_loc,
+        ytd_loc if "ytd_loc" in locals() else pd.DataFrame(),
         x=0.75 * inch,
         y=y_loc,
         max_width=width - 1.5 * inch,
@@ -1886,13 +1853,12 @@ def build_reporting_hub_pdf(
         font_size=6,
     )
 
-
-    # finish the Costs & Trends summary (window totals + YTD by location) page
+    # Finish the Costs & Trends summary page
     c.showPage()
 
     # ---------------------------------------------------
-    # 3b) YTD SUMMARY BY ASSET — OWN PAGE
-    #     Uses the same table as the Costs & Trends tab
+    # 3b) YTD SUMMARY BY ASSET — OWN PAGE (Workorders ONLY)
+    #     Build from Workorders using same cost definition
     # ---------------------------------------------------
     c.setPageSize(landscape(letter))
     width, height = landscape(letter)
@@ -1900,22 +1866,36 @@ def build_reporting_hub_pdf(
     _title("YTD Summary by Asset", height - 0.7 * inch, 18)
     c.setFont("Helvetica", 10)
 
-    # Pull the already-built YTD asset table from the tab
-    df_asset = pd.DataFrame()
-    try:
-        import streamlit as st
-        if "rhub_costs_ytd_asset" in st.session_state:
-            df_asset = st.session_state["rhub_costs_ytd_asset"]
-    except Exception:
-        df_asset = pd.DataFrame()
+    ytd_asset = pd.DataFrame()
 
-    # Format as currency with 2 decimals (skip the first col, which is Asset name)
-    if df_asset is not None and not df_asset.empty:
-        df_asset = _fmt_currency(df_asset, skip_first=True)
+    if df_wo is not None and not df_wo.empty:
+        # Find asset column robustly
+        asset_col_wo = _find(df_wo, "Asset", "ASSET", "asset", "Asset Name", "Name")
+
+        if asset_col_wo and date_col_wo and item_col and totl_col and end_date is not None:
+            tmpa = df_wo.copy()
+            tmpa[date_col_wo] = pd.to_datetime(tmpa[date_col_wo], errors="coerce")
+            tmpa["__pdf_cost"] = (_num(tmpa[item_col]) + _num(tmpa[totl_col])).astype(float)
+
+            # location filter same as location page
+            if loc_col_wo and locations:
+                allowed_locs = {str(x).strip() for x in locations}
+                tmpa = tmpa[tmpa[loc_col_wo].astype(str).str.strip().isin(allowed_locs)]
+
+            # YTD window
+            y0 = datetime(end_date.year, 1, 1)
+            tmpa = tmpa[(tmpa[date_col_wo] >= y0) & (tmpa[date_col_wo] <= pd.to_datetime(end_date))]
+
+            tmpa["__Month"] = tmpa[date_col_wo].dt.month
+            ytd_asset = _tx_ytd_pivot(tmpa, asset_col_wo, "__pdf_cost")
+
+    # Format as currency with 2 decimals (skip first col)
+    if ytd_asset is not None and not ytd_asset.empty:
+        ytd_asset = _fmt_currency(ytd_asset, skip_first=True)
 
     top_y_asset = height - 1.8 * inch
     _draw_table_paged(
-        df_asset,
+        ytd_asset,
         x=0.75 * inch,
         top_y=top_y_asset,
         max_width=width - 1.5 * inch,
@@ -1924,8 +1904,9 @@ def build_reporting_hub_pdf(
         page_title="YTD Summary by Asset",
     )
 
-    # done with the YTD Asset page
+    # Done with the YTD Asset page
     c.showPage()
+
 
 
 
