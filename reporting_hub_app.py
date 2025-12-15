@@ -4,19 +4,13 @@ import io
 import re
 import os
 import base64
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-
-try:
-    from zoneinfo import ZoneInfo  # Python 3.9+
-except ImportError:
-    ZoneInfo = None
-
 
 # bcrypt is optional – if missing, we disable login
 try:
@@ -238,33 +232,24 @@ def _find(df: pd.DataFrame, *cands: str) -> Optional[str]:
     return None
 
 
-def _get_last_parquet_update(parquet_dir: Path, tz_name: str = "America/New_York"):
+def _get_last_parquet_update(parquet_dir: Path):
     """
     Return the most recent modification datetime of any .parquet file
-    in parquet_dir, converted to the given timezone (default: America/New_York).
-    If none found or error, return None.
+    in parquet_dir. If none found or error, return None.
     """
     try:
         latest_ts = None
         for p in parquet_dir.glob("*.parquet"):
             if not p.is_file():
                 continue
-            ts = p.stat().st_mtime  # POSIX timestamp (assume UTC)
+            ts = p.stat().st_mtime
             if latest_ts is None or ts > latest_ts:
                 latest_ts = ts
-
         if latest_ts is None:
             return None
-
-        # Interpret as UTC, then convert to desired timezone
-        dt_utc = datetime.fromtimestamp(latest_ts, tz=timezone.utc)
-        if ZoneInfo is not None:
-            return dt_utc.astimezone(ZoneInfo(tz_name))
-        # Fallback if ZoneInfo isn't available
-        return dt_utc
+        return datetime.fromtimestamp(latest_ts)
     except Exception:
         return None
-
 
 
 # Show approximate last update time based on parquet file mtimes
@@ -273,7 +258,6 @@ if _last_upd:
     st.sidebar.caption(f"🕒 DB last updated (approx): {_last_upd:%Y-%m-%d %H:%M}")
 else:
     st.sidebar.caption("🕒 DB last updated: n/a")
-
 
     
 # =========================
@@ -1830,14 +1814,54 @@ def build_reporting_hub_pdf(
             f"Last month in window: ${last_month_total:,.2f}",
         )
 
-    # --- YTD Summary by Location (true YTD from Transactions) ---
+    # --- YTD Summary by Location ---
+    # Prefer the *exact* YTD Summary by Location table from the Costs & Trends tab (or what the caller passes in),
+    # and only fall back to building YTD from Transactions if that table isn't available.
     y_top = height - 2.1 * inch
 
-    if loc_col_tx and cost_col and not df_tx_ytd.empty:
+    # 1) Caller-provided table (PDF page passes this as filtered_dfs['costs_trends'])
+    df_costs_tbl = filtered_dfs.get("costs_trends", pd.DataFrame())
+
+    # 2) If not provided (or empty), try the in-app table cached in session_state
+    if df_costs_tbl is None or df_costs_tbl.empty:
+        try:
+            import streamlit as st
+            df_costs_tbl = st.session_state.get("rhub_costs_ytd_loc", pd.DataFrame())
+        except Exception:
+            df_costs_tbl = pd.DataFrame()
+
+    # 3) If we have the pivot table already, use it. Otherwise, attempt to build it from raw rows.
+    ytd_loc = pd.DataFrame()
+
+    if df_costs_tbl is not None and not df_costs_tbl.empty:
+        if "YTD Total" in df_costs_tbl.columns:
+            ytd_loc = df_costs_tbl.copy()
+        else:
+            # Build a pivot similar to the Costs & Trends page
+            date_col_c = _find(df_costs_tbl, "Completed on", "Completed On", "COMPLETED ON", "Date", "Service date", "Created on")
+            loc_col_c  = _find(df_costs_tbl, "Location", "NS Location", "location", "Location2")
+            cost_col_c = _find(df_costs_tbl, "_Cost", "__cost", "_COST", "Cost", "Total cost", "Total Cost", "Ext Cost", "Extended Cost", "Value")
+
+            if date_col_c and loc_col_c and cost_col_c:
+                tmp = df_costs_tbl.copy()
+                tmp[date_col_c] = pd.to_datetime(tmp[date_col_c], errors="coerce")
+                tmp[cost_col_c] = pd.to_numeric(tmp[cost_col_c], errors="coerce").fillna(0.0)
+
+                # YTD frame: Jan 1 -> end_date for the same year
+                if end_date:
+                    y0 = datetime(end_date.year, 1, 1)
+                    tmp = tmp[(tmp[date_col_c] >= y0) & (tmp[date_col_c] <= pd.to_datetime(end_date))]
+
+                tmp["__Month"] = tmp[date_col_c].dt.month
+                ytd_loc = _tx_ytd_pivot(tmp, loc_col_c, cost_col_c)
+
+    # 4) Fallback: build true YTD from Transactions (legacy behavior)
+    if (ytd_loc is None or ytd_loc.empty) and loc_col_tx and cost_col and not df_tx_ytd.empty:
         ytd_loc = _tx_ytd_pivot(df_tx_ytd, loc_col_tx, cost_col)
+
+    # Currency format (skip first col = Location name)
+    if ytd_loc is not None and not ytd_loc.empty:
         ytd_loc = _fmt_currency(ytd_loc, skip_first=True)
-    else:
-        ytd_loc = pd.DataFrame()
 
     _sub("YTD Summary by Location", y_top, 12)
     y_loc = y_top - 0.3 * inch
@@ -2392,6 +2416,7 @@ if len(all_locations) > 0:
     )
 else:
     selected_locations = []
+
 
 
 # ========================================
@@ -3733,7 +3758,11 @@ def _render_inventory_analysis(df_parts, df_tx, start_date, end_date, locations)
         ttl = doc.add_paragraph()
         rn = ttl.add_run(f"Inventory KPI Report — {loc_label_for_display} — {period_mode}")
         ...
-
+        st.download_button(
+            "Download KPI Word Report (current filter)",
+            data=bio.getvalue(),
+            file_name=f"Inventory_KPI_Report_{safe_loc_tag}_{period_tag}.docx",
+        )
 
         doc.add_paragraph(
             f"PO/WO coverage (NET): {0 if coverage_net is None or np.isnan(coverage_net) else coverage_net:.2f}%. "
@@ -3782,7 +3811,7 @@ def _render_inventory_analysis(df_parts, df_tx, start_date, end_date, locations)
         st.download_button(
             "Download KPI Word Report (current filter)",
             data=bio.getvalue(),
-            file_name=f"Inventory_KPI_Report_{safe_loc_tag}_{period_tag}.docx",
+            file_name=f"Inventory_KPI_Report_{pick_loc.replace(' ','_')}_{period_tag}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             use_container_width=True
         )
@@ -4824,8 +4853,6 @@ def render_expected_service(
 
 
 
-
-
 # =========================
 # WO REPORT TAB (STATUS SNAPSHOT)
 # =========================
@@ -5320,25 +5347,12 @@ def render_wo_report(
 
     # --- Rebuild df_overdue: IsOpen = True AND DueDate < today ---
     if due_col_all and isopen_col_all and due_col_all in df_overdue.columns and isopen_col_all in df_overdue.columns:
-        # Make both sides pandas Timestamps at midnight (safe for tz-aware + strings)
-        today_ts = pd.Timestamp(today).normalize()
-
+        # Normalize due dates to midnight timestamps so we can safely compare (avoids datetime64 vs date TypeError)
         due_dt = pd.to_datetime(df_overdue[due_col_all], errors="coerce")
-
-        # If tz-aware, drop timezone so it can compare to naive today_ts
-        try:
-            if getattr(due_dt.dt, "tz", None) is not None:
-                due_dt = due_dt.dt.tz_convert(None)
-        except Exception:
-            pass
-
-        due_dt = due_dt.dt.normalize()
-
+        today_ts = pd.Timestamp(today)
         mask_open_over = _is_open_mask(df_overdue, isopen_col_all)
-        mask_due_past = due_dt < today_ts
-
+        mask_due_past = due_dt.dt.normalize() < today_ts.normalize()
         df_overdue = df_overdue[mask_open_over & mask_due_past].copy()
-
 
     # --- Rebuild df_open_due_started: IsOpen = True (optionally Status in [Due, Started]) ---
     if isopen_col_all and isopen_col_all in df_open_due_started.columns:
@@ -5673,9 +5687,6 @@ def render_wo_report(
         mime="application/pdf",
         key="dl_wo_cal_30_pdf",
     )
-
-    
-    
 
 
 import io
@@ -7256,9 +7267,8 @@ def _render_wo_forms_pdf_page():
             "No work orders available in the filtered data to show detail or export PDFs. "
             "Check your main sidebar filters (date/location) and the additional filters above."
         )
-
-
-
+        
+        
 def _render_hours_worksheet_page():
     """
     Hours Reading Entry — simple type-ahead dropdown
@@ -7631,12 +7641,6 @@ elif current_page == "⏱ Hours Worksheet":
 elif current_page == "📄 PDF Report":
     st.markdown("### 📄 PDF Report")
 
-    import calendar
-    import numpy as np
-    import pandas as pd
-    import streamlit as st
-    from datetime import date
-
     def _filter_df_to_window_for_pdf(df: pd.DataFrame,
                                      start: date,
                                      end: date,
@@ -7652,116 +7656,90 @@ elif current_page == "📄 PDF Report":
         if date_col is None:
             return df
         s = pd.to_datetime(df[date_col], errors="coerce")
-        # Use pandas timestamps for safe comparisons
-        start_ts = pd.Timestamp(start)
-        end_ts = pd.Timestamp(end) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
-        mask = s.between(start_ts, end_ts)
+        mask = s.dt.date.between(start, end)
         return df.loc[mask].copy()
 
-    # -------------------------------
-    # Build YTD Summary by Location (same logic as Costs & Trends page)
-    # -------------------------------
-    def _first_present(_df: pd.DataFrame, candidates):
-        for c in candidates:
-            if c in _df.columns:
-                return c
-        return None
-
-    def _ytd_month_pivot(df_in: pd.DataFrame, index_col: str, cost_col_in: str) -> pd.DataFrame:
-        g = df_in.groupby([index_col, "__Month"], as_index=False)[cost_col_in].sum()
-        g["Mon"] = g["__Month"].map(lambda m: calendar.month_abbr[int(m)] if pd.notna(m) else "")
-        pv = g.pivot(index=index_col, columns="Mon", values=cost_col_in).reset_index()
-
-        # Order: Dec..Jan (matches your page)
-        mon_desc = [calendar.month_abbr[m] for m in range(12, 0, -1)]
-        month_cols = [c for c in mon_desc if c in pv.columns]
-
-        for c in month_cols:
-            pv[c] = pd.to_numeric(pv[c], errors="coerce").fillna(0.0)
-
-        pv["YTD Total"] = pv[month_cols].sum(axis=1, skipna=True)
-
-        ordered_cols = [index_col, "YTD Total"] + month_cols
-        pv = pv[ordered_cols].sort_values("YTD Total", ascending=False)
-        return pv
-
-    def _build_costs_ytd_by_location_for_pdf(df_all_in: pd.DataFrame, year_i: int, selected_locations):
-        if df_all_in is None or df_all_in.empty:
-            return pd.DataFrame()
-
-        df = df_all_in.copy()
-
-        # Basic cleanup similar to Costs & Trends (strip object/string)
-        for c in df.columns:
-            if df[c].dtype == object:
-                df[c] = df[c].astype("string").str.strip()
-
-        date_col = _first_present(df, ["Completed on", "COMPLETED ON", "Date", "Service date", "Created on", "Due date", "Started on"])
-        loc_col  = _first_present(df, ["Location", "NS Location", "location", "Location2"])
-        sort_col = _first_present(df, ["Sort", "SORT", "sort"])
-        wo_col   = _first_present(df, ["WORKORDER", "Workorder", "Work Order", "WO_ID", "ID"])
-
-        if not date_col or not loc_col:
-            return pd.DataFrame()
-
-        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-
-        if sort_col:
-            df[sort_col] = pd.to_numeric(df[sort_col], errors="coerce").fillna(1).astype(int)
-        else:
-            df["Sort"] = 1
-            sort_col = "Sort"
-
-        # Cost column (prefer _Cost)
-        if "_Cost" in df.columns:
-            cost_col = "_Cost"
-        elif "__cost" in df.columns:
-            cost_col = "__cost"
-        else:
-            def _num(s): return pd.to_numeric(s, errors="coerce").fillna(0.0)
-            item_col = _first_present(df, ["Total Item Cost", "total item cost", "item total", "item_total", "TotalItemCost"])
-            totl_col = _first_present(df, ["Total Cost", "total cost", "cost total", "cost_total", "TotalCost"])
-            item_cost = _num(df[item_col]) if item_col else 0.0
-            totl_cost = _num(df[totl_col]) if totl_col else 0.0
-            df["__cost"] = (item_cost + totl_cost).astype(float)
-            cost_col = "__cost"
-
-        df[cost_col] = pd.to_numeric(df[cost_col], errors="coerce").fillna(0.0)
-
-        # Helper cols
-        df["__Year"] = pd.to_numeric(df[date_col].dt.year, errors="coerce").astype("Int64")
-        df["__Month"] = df[date_col].dt.month
-
-        # YEAR scope
-        df_year = df[df["__Year"] == int(year_i)].copy()
-        if df_year.empty:
-            return pd.DataFrame()
-
-        # Location filter (match your master filter style)
-        if selected_locations:
-            loc_strs = [str(x) for x in selected_locations]
-            df_year = df_year[df_year[loc_col].astype(str).isin(loc_strs)]
-            if df_year.empty:
-                return pd.DataFrame()
-
-        return _ytd_month_pivot(df_year, loc_col, cost_col)
-
     # ---------- base frames from dfs ----------
+    # Workorders are the source of truth for the Costs & Trends YTD tables (same logic as the Costs & Trends tab).
+    df_wo_pdf       = dfs.get("workorders", pd.DataFrame())
     df_parts_pdf    = dfs.get("parts", pd.DataFrame())
     df_tx_pdf       = dfs.get("transactions", pd.DataFrame())
     df_expected_pdf = dfs.get("expected", pd.DataFrame())
 
-    # Build costs summary table for PDF (don’t rely on session_state)
-    df_wo_all = dfs.get("workorders", pd.DataFrame())
-    year_i = int(end_date.year)  # match Costs & Trends master year scope
-    df_costs_pdf = _build_costs_ytd_by_location_for_pdf(df_wo_all, year_i, selected_locations)
-
     # ---------- apply *location* filter ----------
-    # NOTE: df_costs_pdf is already filtered in the builder; keep this harmless in case _filter_by_locations expects/does something
-    df_costs_pdf    = _filter_by_locations(df_costs_pdf, selected_locations) if not df_costs_pdf.empty else df_costs_pdf
+    df_wo_pdf       = _filter_by_locations(df_wo_pdf, selected_locations)
     df_parts_pdf    = _filter_by_locations(df_parts_pdf, selected_locations)
     df_tx_pdf       = _filter_by_locations(df_tx_pdf, selected_locations)
     df_expected_pdf = _filter_by_locations(df_expected_pdf, selected_locations)
+
+    # ---------- build Costs & Trends table: YTD Summary by Location ----------
+    def _first_present(df: pd.DataFrame, candidates: list[str]) -> str | None:
+        for c in candidates:
+            if c in df.columns:
+                return c
+        return None
+
+    def _build_ytd_by_location_from_workorders(df_in: pd.DataFrame, year_i: int) -> pd.DataFrame:
+        import calendar
+        if df_in is None or df_in.empty:
+            return pd.DataFrame()
+
+        dfw = df_in.copy()
+
+        # detect columns (same candidates as the Costs & Trends tab)
+        date_col = _first_present(dfw, ["Completed on","COMPLETED ON","Completed On","Date","Service date","Created on","Due date","Started on"])
+        loc_col  = _first_present(dfw, ["Location","NS Location","location","Location2"])
+
+        if not date_col or not loc_col:
+            return pd.DataFrame()
+
+        dfw[date_col] = pd.to_datetime(dfw[date_col], errors="coerce")
+
+        # cost column: prefer helper _Cost
+        if "_Cost" in dfw.columns:
+            cost_col = "_Cost"
+        elif "__cost" in dfw.columns:
+            cost_col = "__cost"
+        else:
+            item_col = _first_present(dfw, ["Total Item Cost","total item cost","item total","item_total","TotalItemCost"])
+            totl_col = _first_present(dfw, ["Total Cost","total cost","cost total","cost_total","TotalCost"])
+            item_cost = pd.to_numeric(dfw[item_col], errors="coerce").fillna(0.0) if item_col else 0.0
+            totl_cost = pd.to_numeric(dfw[totl_col], errors="coerce").fillna(0.0) if totl_col else 0.0
+            dfw["__cost"] = (item_cost + totl_cost).astype(float)
+            cost_col = "__cost"
+
+        dfw[cost_col] = pd.to_numeric(dfw[cost_col], errors="coerce").fillna(0.0)
+
+        # year scope = full Jan–Dec for the master year
+        dfw = dfw[dfw[date_col].dt.year == year_i].copy()
+        if dfw.empty:
+            return pd.DataFrame()
+
+        dfw["__Month"] = dfw[date_col].dt.month
+
+        g = dfw.groupby([loc_col, "__Month"], as_index=False)[cost_col].sum()
+        g["Mon"] = g["__Month"].map(lambda m: calendar.month_abbr[int(m)] if pd.notna(m) else "")
+        pv = g.pivot(index=loc_col, columns="Mon", values=cost_col).reset_index()
+
+        # order cols: Dec -> Jan
+        mon_desc = [calendar.month_abbr[m] for m in range(12, 0, -1)]
+        month_cols = [c for c in mon_desc if c in pv.columns]
+        for c in month_cols:
+            pv[c] = pd.to_numeric(pv[c], errors="coerce").fillna(0.0)
+
+        pv["YTD Total"] = pv[month_cols].sum(axis=1, skipna=True)
+        ordered_cols = [loc_col, "YTD Total"] + month_cols
+        pv = pv[ordered_cols].sort_values("YTD Total", ascending=False)
+        return pv
+
+    year_i = int(end_date.year) if end_date else int(date.today().year)
+    df_costs_pdf = _build_ytd_by_location_from_workorders(df_wo_pdf, year_i)
+
+    # Cache for other PDF pages (asset page uses session_state in build_reporting_hub_pdf)
+    try:
+        st.session_state["rhub_costs_ytd_loc"] = df_costs_pdf.copy() if df_costs_pdf is not None else pd.DataFrame()
+    except Exception:
+        pass
 
     # ---------- apply *date range* (where it makes sense) ----------
     df_tx_pdf = _filter_df_to_window_for_pdf(
@@ -7777,16 +7755,15 @@ elif current_page == "📄 PDF Report":
         end_date,
         ["DueDate", "Expected Date", "Date"],
     )
-
-    filtered_dfs_pdf = {
-        "costs_trends": df_costs_pdf,   # <-- YTD Summary by Location table
+filtered_dfs_pdf = {
+        "workorders": df_wo_pdf,
+        "costs_trends": df_costs_pdf,
         "parts": df_parts_pdf,
         "transactions": df_tx_pdf,
         "expected": df_expected_pdf,
     }
 
     st.caption("PDF uses the current Reporting Window + selected Locations.")
-    st.caption(f"Costs (YTD Summary by Location) for PDF: rows={len(df_costs_pdf):,} • year={year_i}")
 
     if st.button("Generate PDF report", type="primary"):
         with st.spinner("Building PDF report..."):
