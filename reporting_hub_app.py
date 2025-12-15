@@ -1882,6 +1882,87 @@ def build_reporting_hub_pdf(
         )
 
         c.showPage()
+        
+    # ---------------------------------------------------
+    # 3b) YTD SUMMARY BY ASSET — OWN PAGE (Workorders only)
+    #     Columns: Asset, YTD Total, current month, prev month, ...
+    # ---------------------------------------------------
+    c.setPageSize(landscape(letter))
+    width, height = landscape(letter)
+    _title("YTD Summary by Asset", height - 0.7 * inch, 18)
+    c.setFont("Helvetica", 10)
+
+    import calendar as _cal
+    import numpy as np
+    import pandas as pd
+
+    # Reuse df_ytd + __pdf_cost + date_col from section (3)
+    asset_col = _find(df_ytd, "Asset", "Asset Name", "ASSET", "Name", "Equipment", "Equipment #")
+
+    df_asset = pd.DataFrame()
+
+    if (df_ytd is not None) and (not df_ytd.empty) and asset_col:
+        tmpa = df_ytd[[asset_col, "__pdf_cost"]].copy()
+        tmpa["__Month"] = pd.to_datetime(df_ytd[date_col], errors="coerce").dt.month if date_col else np.nan
+
+        p = tmpa.pivot_table(
+            index=asset_col,
+            columns="__Month",
+            values="__pdf_cost",
+            aggfunc="sum",
+            fill_value=0.0,
+        )
+
+        # ensure months 1..12 exist and in Jan..Dec order
+        for mm in range(1, 13):
+            if mm not in p.columns:
+                p[mm] = 0.0
+        p = p[[mm for mm in range(1, 13)]]
+
+        # numeric YTD
+        p["YTD Total"] = p.sum(axis=1)
+
+        # to columns
+        p = p.reset_index()
+
+        # rename month numbers to abbreviations
+        month_names = {m: _cal.month_abbr[m] for m in range(1, 13)}
+        df_asset = p.rename(columns=month_names)
+
+    # reorder to: Asset, YTD Total, current month, previous month, ...
+    if df_asset is not None and not df_asset.empty and ("YTD Total" in df_asset.columns):
+        cur_m = int(end_date.month) if end_date else int(datetime.today().month)
+        mon_order = (
+            [_cal.month_abbr[m] for m in range(cur_m, 0, -1)]
+            + [_cal.month_abbr[m] for m in range(12, cur_m, -1)]
+        )
+
+        base_cols = [asset_col, "YTD Total"]
+        month_cols = [m for m in mon_order if m in df_asset.columns]
+        remaining = [c for c in df_asset.columns if c not in (base_cols + month_cols)]
+        df_asset = df_asset[base_cols + month_cols + remaining]
+
+        # sort rows high -> low by YTD Total
+        y = pd.to_numeric(df_asset["YTD Total"], errors="coerce").fillna(0.0)
+        df_asset = df_asset.loc[y.sort_values(ascending=False).index].reset_index(drop=True)
+
+    # format AFTER ordering
+    if df_asset is not None and not df_asset.empty:
+        df_asset = _fmt_currency(df_asset, skip_first=True)
+
+    top_y_asset = height - 1.8 * inch
+    _draw_table_paged(
+        df_asset,
+        x=0.75 * inch,
+        top_y=top_y_asset,
+        max_width=width - 1.5 * inch,
+        bottom_margin=0.7 * inch,
+        font_size=6,
+        page_title="YTD Summary by Asset",
+    )
+
+    c.showPage()
+
 
 
 
