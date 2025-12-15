@@ -1939,20 +1939,46 @@ def build_reporting_hub_pdf(
         y = pd.to_numeric(df_asset["YTD Total"], errors="coerce").fillna(0.0)
         df_asset = df_asset.loc[y.sort_values(ascending=False).index].reset_index(drop=True)
 
-    if df_asset is not None and not df_asset.empty:
-        df_asset = _fmt_currency(df_asset, skip_first=True)
+    if df_asset is None or df_asset.empty:
+        c.drawString(0.75 * inch, height - 1.3 * inch, "No YTD asset summary rows to display.")
+        c.showPage()
+    else:
+        # Format AFTER ordering
+        df_asset = _fmt_currency(df_asset, skip_first=True).reset_index(drop=True)
 
-    top_y_asset = height - 1.8 * inch
-    _draw_table_paged(
-        df_asset,
-        x=0.75 * inch,
-        top_y=top_y_asset,
-        max_width=width - 1.5 * inch,
-        bottom_margin=0.7 * inch,
-        font_size=6,
-        page_title="YTD Summary by Asset",
-    )
-    c.showPage()
+        top_y_asset = height - 1.8 * inch
+
+        MAX_ROWS_PER_PAGE = 18  # <-- tune as needed (does NOT count header)
+
+        total_rows = len(df_asset)
+        start_i = 0
+        page_n = 1
+
+        while start_i < total_rows:
+            chunk = df_asset.iloc[start_i:start_i + MAX_ROWS_PER_PAGE].copy()
+
+            _draw_table_paged(
+                chunk,
+                x=0.75 * inch,
+                top_y=top_y_asset,
+                max_width=width - 1.5 * inch,
+                bottom_margin=0.7 * inch,
+                font_size=6,
+                page_title=f"YTD Summary by Asset (p{page_n})",
+            )
+
+            start_i += MAX_ROWS_PER_PAGE
+            page_n += 1
+
+            if start_i < total_rows:
+                c.showPage()
+                c.setPageSize(landscape(letter))
+                width, height = landscape(letter)
+                _title("YTD Summary by Asset (cont.)", height - 0.7 * inch, 18)
+                c.setFont("Helvetica", 10)
+
+        c.showPage()
+
 
     # ---------------------------------------------------
     # 5) TRANSACTIONS — FILTERED DETAIL  (paged)
