@@ -5320,10 +5320,25 @@ def render_wo_report(
 
     # --- Rebuild df_overdue: IsOpen = True AND DueDate < today ---
     if due_col_all and isopen_col_all and due_col_all in df_overdue.columns and isopen_col_all in df_overdue.columns:
-        due_ser = pd.to_datetime(df_overdue[due_col_all], errors="coerce").dt.date
+        # Make both sides pandas Timestamps at midnight (safe for tz-aware + strings)
+        today_ts = pd.Timestamp(today).normalize()
+
+        due_dt = pd.to_datetime(df_overdue[due_col_all], errors="coerce")
+
+        # If tz-aware, drop timezone so it can compare to naive today_ts
+        try:
+            if getattr(due_dt.dt, "tz", None) is not None:
+                due_dt = due_dt.dt.tz_convert(None)
+        except Exception:
+            pass
+
+        due_dt = due_dt.dt.normalize()
+
         mask_open_over = _is_open_mask(df_overdue, isopen_col_all)
-        mask_due_past = due_ser < today
+        mask_due_past = due_dt < today_ts
+
         df_overdue = df_overdue[mask_open_over & mask_due_past].copy()
+
 
     # --- Rebuild df_open_due_started: IsOpen = True (optionally Status in [Due, Started]) ---
     if isopen_col_all and isopen_col_all in df_open_due_started.columns:
