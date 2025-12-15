@@ -1948,7 +1948,7 @@ def build_reporting_hub_pdf(
 
         top_y_asset = height - 1.8 * inch
 
-        MAX_ROWS_PER_PAGE = 18  # <-- tune as needed (does NOT count header)
+        MAX_ROWS_PER_PAGE = 12  # <-- tune as needed (does NOT count header)
 
         total_rows = len(df_asset)
         start_i = 0
