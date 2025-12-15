@@ -7650,15 +7650,9 @@ elif current_page == "📄 PDF Report":
         return df.loc[mask].copy()
 
     # ---------- base frames from dfs ----------
-    df_costs_pdf = (
-        dfs.get("ytd_summary_by_location", pd.DataFrame())
-        if not dfs.get("ytd_summary_by_location", pd.DataFrame()).empty
-        else dfs.get("ytd_summary_location", pd.DataFrame())
-        if not dfs.get("ytd_summary_location", pd.DataFrame()).empty
-        else dfs.get("ytd_by_location", pd.DataFrame())
-        if not dfs.get("ytd_by_location", pd.DataFrame()).empty
-        else dfs.get("costs_trends", pd.DataFrame())
-    )
+    # Use the exact displayed table from Costs & Trends page (YTD Summary by Location)
+    df_costs_pdf = st.session_state.get("rhub_costs_ytd_loc", pd.DataFrame())
+
     df_parts_pdf    = dfs.get("parts", pd.DataFrame())
     df_tx_pdf       = dfs.get("transactions", pd.DataFrame())
     df_expected_pdf = dfs.get("expected", pd.DataFrame())
