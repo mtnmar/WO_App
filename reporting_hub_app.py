@@ -2059,7 +2059,7 @@ def build_reporting_hub_pdf(
             ]
 
     if df_expected is None or df_expected.empty:
-    c.save()
+        c.save()
     return buf.getvalue()
 
 
