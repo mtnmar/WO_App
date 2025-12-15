@@ -2079,7 +2079,7 @@ def build_reporting_hub_pdf(
         c.showPage()
 
     # ---------------------------------------------------
-    # 6) WORK ORDERS — KPI PAGES (one per table)
+    # 6) WORK ORDERS — KPI PAGES (one per table)  [PAGED]
     # ---------------------------------------------------
     wo_kpis = _compute_wo_kpis_for_pdf(start_date, end_date, locations)
     wo_tables = _compute_wo_tables_for_pdf(start_date, end_date, locations)
@@ -2090,6 +2090,8 @@ def build_reporting_hub_pdf(
         ("Open", "open", "open_count", "open_avg_days"),
         ("Completed in Window", "completed", "completed_count", None),
     ]
+
+    MAX_ROWS_PER_PAGE = 10  # <-- tune as needed (does NOT count header)
 
     for label, tbl_key, count_key, avg_key in wo_blocks:
         c.setPageSize(landscape(letter))
@@ -2134,19 +2136,46 @@ def build_reporting_hub_pdf(
                     continue
                 clean_cols.append(col)
             if clean_cols:
-                tbl_df = tbl_df[clean_cols]
+                tbl_df = tbl_df[clean_cols].reset_index(drop=True)
 
         top_y = height - 1.8 * inch
-        _draw_table_paged(
-            tbl_df,
-            x=0.5 * inch,
-            top_y=top_y,
-            max_width=width - 1.0 * inch,
-            bottom_margin=0.7 * inch,
-            font_size=6,
-            page_title="Work Orders — " + label,
-        )
+
+        if tbl_df is None or tbl_df.empty:
+            c.drawString(0.75 * inch, top_y, "No rows to display.")
+            c.showPage()
+            continue
+
+        # --- Paged draw ---
+        total_rows = len(tbl_df)
+        start_i = 0
+        page_n = 1
+
+        while start_i < total_rows:
+            chunk = tbl_df.iloc[start_i:start_i + MAX_ROWS_PER_PAGE].copy()
+
+            _draw_table_paged(
+                chunk,
+                x=0.5 * inch,
+                top_y=top_y,
+                max_width=width - 1.0 * inch,
+                bottom_margin=0.7 * inch,
+                font_size=6,
+                page_title=f"Work Orders — {label} (p{page_n})",
+            )
+
+            start_i += MAX_ROWS_PER_PAGE
+            page_n += 1
+
+            if start_i < total_rows:
+                c.showPage()
+                c.setPageSize(landscape(letter))
+                width, height = landscape(letter)
+                _title("Work Orders — " + label + " (cont.)", height - 0.7 * inch, 18)
+                c.setFont("Helvetica", 9)
+                c.drawString(0.75 * inch, height - 1.3 * inch, line)
+
         c.showPage()
+
 
     # ---------------------------------------------------
     # 7) SERVICES / EXPECTED — All + KPI PAGES
