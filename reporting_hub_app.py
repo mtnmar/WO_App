@@ -1716,167 +1716,181 @@ def build_reporting_hub_pdf(
 
     c.showPage()
 
-    # ---------------------------------------------------
-    # 3) COSTS & TRENDS PAGE — Workorders (Workorders.parquet) ONLY
-    # ---------------------------------------------------
-    c.setPageSize(landscape(letter))
-    width, height = landscape(letter)
-    _title("Costs & Trends — Summary", height - 0.7 * inch, 18)
-    c.setFont("Helvetica", 10)
+# ---------------------------------------------------
+# 3) COSTS & TRENDS PAGE — Workorders (Workorders.parquet) ONLY
+# ---------------------------------------------------
+c.setPageSize(landscape(letter))
+width, height = landscape(letter)
+_title("Costs & Trends — Summary", height - 0.7 * inch, 18)
+c.setFont("Helvetica", 10)
 
-    # ---------- helper: fetch DF by possible keys ----------
-    def _get_df_any_key(d: dict, *keys: str) -> pd.DataFrame:
-        if not isinstance(d, dict):
-            return pd.DataFrame()
-        for k in keys:
-            if k in d and isinstance(d[k], pd.DataFrame):
-                return d[k]
-        # case-insensitive key match (protects against accidental casing)
-        low = {str(k).strip().lower(): k for k in d.keys()}
-        for k in keys:
-            kk = str(k).strip().lower()
-            if kk in low and isinstance(d[low[kk]], pd.DataFrame):
-                return d[low[kk]]
-        return pd.DataFrame()
+# Base DF from filtered_dfs
+df_wo = filtered_dfs.get("workorders", pd.DataFrame()).copy()
 
-    # Base DF should be Workorders.parquet via the app's "costs_trends" dataset key
-    df_wo = filtered_dfs.get("workorders", pd.DataFrame()).copy()
+# last resort: session cache (only if present)
+if (df_wo is None) or df_wo.empty:
+    try:
+        import streamlit as st
+        df_wo = st.session_state.get("rhub_costs_source_rows", pd.DataFrame()).copy()
+    except Exception:
+        df_wo = pd.DataFrame()
 
+# If still empty, render n/a and keep going (so the PDF doesn't crash)
+if df_wo is None or df_wo.empty:
+    c.drawString(0.75 * inch, height - 1.3 * inch, "Window total: n/a (no Workorders data)")
+    c.showPage()
 
-    # last resort: session cache (only if present)
-    if (df_wo is None) or df_wo.empty:
-        try:
-            import streamlit as st
-            df_wo = st.session_state.get("rhub_costs_source_rows", pd.DataFrame()).copy()
-        except Exception:
-            df_wo = pd.DataFrame()
+else:
+    # --- Find key columns in Workorders ---
+    loc_col  = _find(df_wo, "Location", "Location2", "NS Location", "location")
+    date_col = _find(
+        df_wo,
+        "Completed On", "Completed on", "COMPLETED ON",
+        "Created On", "Created on", "Date", "Service date"
+    )
 
-    # If still empty, render n/a and keep going (so the PDF doesn't crash)
-    if df_wo is None or df_wo.empty:
-        c.drawString(0.75 * inch, height - 1.3 * inch, "Window total: n/a (no Workorders data)")
-        c.showPage()
+    item_col = _find(df_wo, "TOTAL ITEM COST", "Total Item Cost", "total item cost", "TotalItemCost")
+    totl_col = _find(df_wo, "Total cost", "Total Cost", "TOTAL COST", "total cost", "TotalCost")
+    cost_fallback_col = _find(df_wo, "_Cost", "_COST", "__cost", "Cost")
+
+    # Build true cost:
+    # Prefer TOTAL ITEM COST + Total cost, else fallback to _Cost
+    if item_col and totl_col:
+        df_wo["__pdf_cost"] = (
+            pd.to_numeric(df_wo[item_col], errors="coerce").fillna(0.0)
+            + pd.to_numeric(df_wo[totl_col], errors="coerce").fillna(0.0)
+        ).astype(float)
+    elif cost_fallback_col:
+        df_wo["__pdf_cost"] = pd.to_numeric(df_wo[cost_fallback_col], errors="coerce").fillna(0.0).astype(float)
     else:
-        # --- Find key columns in Workorders ---
-        loc_col  = _find(df_wo, "Location", "Location2", "NS Location", "location")
-        date_col = _find(df_wo, "Completed On", "Completed on", "COMPLETED ON",
-                         "Created On", "Created on", "Date", "Service date")
+        df_wo["__pdf_cost"] = 0.0
 
-        item_col = _find(df_wo, "TOTAL ITEM COST", "Total Item Cost", "total item cost", "TotalItemCost")
-        totl_col = _find(df_wo, "Total cost", "Total Cost", "TOTAL COST", "total cost", "TotalCost")
-        cost_fallback_col = _find(df_wo, "_Cost", "_COST", "__cost", "Cost")
+    # --- Apply location + date filters (window) ---
+    df_win = df_wo.copy()
 
-        # Build true cost:
-        # Prefer TOTAL ITEM COST + Total cost, else fallback to _Cost
-        if item_col and totl_col:
-            df_wo["__pdf_cost"] = (
-                pd.to_numeric(df_wo[item_col], errors="coerce").fillna(0.0)
-                + pd.to_numeric(df_wo[totl_col], errors="coerce").fillna(0.0)
-            ).astype(float)
-        elif cost_fallback_col:
-            df_wo["__pdf_cost"] = pd.to_numeric(df_wo[cost_fallback_col], errors="coerce").fillna(0.0).astype(float)
-        else:
-            # nothing usable
-            df_wo["__pdf_cost"] = 0.0
+    if loc_col and locations:
+        allowed_locs = {str(x).strip() for x in locations}
+        df_win = df_win[df_win[loc_col].astype(str).str.strip().isin(allowed_locs)]
 
-        # --- Apply location + date filters (window) ---
-        df_win = df_wo.copy()
-
-        if loc_col and locations:
-            allowed_locs = {str(x).strip() for x in locations}
-            df_win = df_win[df_win[loc_col].astype(str).str.strip().isin(allowed_locs)]
-
-        if date_col and date_col in df_win.columns:
-            df_win[date_col] = pd.to_datetime(df_win[date_col], errors="coerce")
-            if start_date and end_date:
-                df_win = df_win[
-                    (df_win[date_col] >= pd.to_datetime(start_date)) &
-                    (df_win[date_col] <= pd.to_datetime(end_date))
-                ]
-
-        total_cost_window = float(df_win["__pdf_cost"].fillna(0.0).sum()) if not df_win.empty else 0.0
-
-        # --- last month total within the current window ---
-        last_month_total = 0.0
-        if (end_date is not None) and (date_col is not None) and (not df_win.empty):
-            m = (
-                (df_win[date_col].dt.year == end_date.year) &
-                (df_win[date_col].dt.month == end_date.month)
-            )
-            last_month_total = float(df_win.loc[m, "__pdf_cost"].fillna(0.0).sum())
-
-        # Draw window totals
-        if total_cost_window:
-            label_total = "YTD total (window)" if (
-                start_date and end_date and
-                start_date.year == end_date.year and
-                start_date.month == 1 and
-                start_date.day == 1
-            ) else "Window total"
-            c.drawString(0.75 * inch, height - 1.3 * inch, f"{label_total}: ${total_cost_window:,.2f}")
-        else:
-            c.drawString(0.75 * inch, height - 1.3 * inch, "Window total: n/a")
-
-        if last_month_total:
-            c.drawString(0.75 * inch, height - 1.6 * inch, f"Last month in window: ${last_month_total:,.2f}")
-
-        # --- Build YTD frame (Jan 1 -> end_date) for same locations ---
-        df_ytd = df_wo.copy()
-
-        if loc_col and locations:
-            allowed_locs = {str(x).strip() for x in locations}
-            df_ytd = df_ytd[df_ytd[loc_col].astype(str).str.strip().isin(allowed_locs)]
-
-        if date_col and end_date:
-            df_ytd[date_col] = pd.to_datetime(df_ytd[date_col], errors="coerce")
-            year_start = datetime(end_date.year, 1, 1)
-            df_ytd = df_ytd[
-                (df_ytd[date_col] >= year_start) &
-                (df_ytd[date_col] <= pd.to_datetime(end_date))
+    if date_col and date_col in df_win.columns:
+        df_win[date_col] = pd.to_datetime(df_win[date_col], errors="coerce")
+        if start_date and end_date:
+            df_win = df_win[
+                (df_win[date_col] >= pd.to_datetime(start_date)) &
+                (df_win[date_col] <= pd.to_datetime(end_date))
             ]
 
-        # --- YTD Summary by Location (from Workorders only) ---
-        ytd_loc = pd.DataFrame()
-        if (not df_ytd.empty) and loc_col:
-            tmp = df_ytd[[loc_col, "__pdf_cost"]].copy()
-            tmp["__Month"] = pd.to_datetime(df_ytd[date_col], errors="coerce").dt.month if date_col else np.nan
+    total_cost_window = float(df_win["__pdf_cost"].fillna(0.0).sum()) if not df_win.empty else 0.0
 
-            # use your existing pivot helper if present; else a safe pivot inline
-            if "_tx_ytd_pivot" in globals():
-                ytd_loc = _tx_ytd_pivot(tmp, loc_col, "__pdf_cost")
-            else:
-                # columns: Jan..Dec + YTD Total
-                p = tmp.pivot_table(index=loc_col, columns="__Month", values="__pdf_cost",
-                                    aggfunc="sum", fill_value=0.0)
-                # ensure 1..12 exist
-                for m in range(1, 13):
-                    if m not in p.columns:
-                        p[m] = 0.0
-                p = p[[m for m in range(1, 13)]]
-                p["YTD Total"] = p.sum(axis=1)
-                p = p.reset_index()
-                # rename month numbers to short names
-                month_names = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
-                p = p.rename(columns=month_names)
-                ytd_loc = p
+    # --- last month total within the current window ---
+    last_month_total = 0.0
+    if (end_date is not None) and (date_col is not None) and (not df_win.empty):
+        m = (
+            (df_win[date_col].dt.year == end_date.year) &
+            (df_win[date_col].dt.month == end_date.month)
+        )
+        last_month_total = float(df_win.loc[m, "__pdf_cost"].fillna(0.0).sum())
 
-        if ytd_loc is not None and not ytd_loc.empty:
-            ytd_loc = _fmt_currency(ytd_loc, skip_first=True)
+    # Draw window totals
+    if total_cost_window:
+        label_total = "YTD total (window)" if (
+            start_date and end_date and
+            start_date.year == end_date.year and
+            start_date.month == 1 and
+            start_date.day == 1
+        ) else "Window total"
+        c.drawString(0.75 * inch, height - 1.3 * inch, f"{label_total}: ${total_cost_window:,.2f}")
+    else:
+        c.drawString(0.75 * inch, height - 1.3 * inch, "Window total: n/a")
 
-        y_top = height - 2.1 * inch
-        _sub("YTD Summary by Location", y_top, 12)
-        y_loc = y_top - 0.3 * inch
-        bottom_margin = 0.7 * inch
-        _draw_table(
-            ytd_loc,
-            x=0.75 * inch,
-            y=y_loc,
-            max_width=width - 1.5 * inch,
-            max_height=y_loc - bottom_margin,
-            font_size=6,
+    if last_month_total:
+        c.drawString(0.75 * inch, height - 1.6 * inch, f"Last month in window: ${last_month_total:,.2f}")
+
+    # --- Build YTD frame (Jan 1 -> end_date) for same locations ---
+    df_ytd = df_wo.copy()
+
+    if loc_col and locations:
+        allowed_locs = {str(x).strip() for x in locations}
+        df_ytd = df_ytd[df_ytd[loc_col].astype(str).str.strip().isin(allowed_locs)]
+
+    if date_col and end_date:
+        df_ytd[date_col] = pd.to_datetime(df_ytd[date_col], errors="coerce")
+        year_start = datetime(end_date.year, 1, 1)
+        df_ytd = df_ytd[
+            (df_ytd[date_col] >= year_start) &
+            (df_ytd[date_col] <= pd.to_datetime(end_date))
+        ]
+
+    # --- YTD Summary by Location (from Workorders only) ---
+    ytd_loc = pd.DataFrame()
+    if (df_ytd is not None) and (not df_ytd.empty) and loc_col:
+        tmp = df_ytd[[loc_col, "__pdf_cost"]].copy()
+        tmp["__Month"] = pd.to_datetime(df_ytd[date_col], errors="coerce").dt.month if date_col else np.nan
+
+        # Pivot to Jan..Dec then rename months
+        p = tmp.pivot_table(
+            index=loc_col,
+            columns="__Month",
+            values="__pdf_cost",
+            aggfunc="sum",
+            fill_value=0.0,
         )
 
-        # finish the Costs & Trends summary page
-        c.showPage()
+        # ensure 1..12 exist
+        for mm in range(1, 13):
+            if mm not in p.columns:
+                p[mm] = 0.0
+        p = p[[mm for mm in range(1, 13)]]
+
+        # YTD total numeric
+        p["YTD Total"] = p.sum(axis=1)
+        p = p.reset_index()
+
+        month_names = {
+            1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+            7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
+        }
+        p = p.rename(columns=month_names)
+        ytd_loc = p
+
+    # ✅ Reorder columns to: Location, YTD Total, current month, previous month, ...
+    if ytd_loc is not None and not ytd_loc.empty and ("YTD Total" in ytd_loc.columns):
+        import calendar as _cal
+
+        cur_m = int(end_date.month) if end_date else int(date.today().month)
+        mon_order = [_cal.month_abbr[m] for m in range(cur_m, 0, -1)] + \
+                    [_cal.month_abbr[m] for m in range(12, cur_m, -1)]
+
+        base_cols = [loc_col, "YTD Total"]
+        month_cols = [m for m in mon_order if m in ytd_loc.columns]
+        remaining = [c for c in ytd_loc.columns if c not in (base_cols + month_cols)]
+        ytd_loc = ytd_loc[base_cols + month_cols + remaining]
+
+        # ✅ Sort rows highest -> lowest by numeric YTD Total
+        y = pd.to_numeric(ytd_loc["YTD Total"], errors="coerce").fillna(0.0)
+        ytd_loc = ytd_loc.loc[y.sort_values(ascending=False).index].reset_index(drop=True)
+
+    # Format AFTER ordering/sorting
+    if ytd_loc is not None and not ytd_loc.empty:
+        ytd_loc = _fmt_currency(ytd_loc, skip_first=True)
+
+    # Draw table
+    y_top = height - 2.1 * inch
+    _sub("YTD Summary by Location", y_top, 12)
+    y_loc = y_top - 0.3 * inch
+    bottom_margin = 0.7 * inch
+    _draw_table(
+        ytd_loc,
+        x=0.75 * inch,
+        y=y_loc,
+        max_width=width - 1.5 * inch,
+        max_height=y_loc - bottom_margin,
+        font_size=6,
+    )
+
+    # finish the Costs & Trends summary page
+    c.showPage()
+
 
     # ---------------------------------------------------
     # 3b) YTD SUMMARY BY ASSET — OWN PAGE (Workorders only)
