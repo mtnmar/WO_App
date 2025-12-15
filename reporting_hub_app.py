@@ -1717,62 +1717,53 @@ def build_reporting_hub_pdf(
     c.showPage()
 
     # ---------------------------------------------------
-    # 3) COSTS & TRENDS PAGE — summary from TX + WO
+    # 3) COSTS & TRENDS PAGE — Workorders ONLY (NO TX)
     # ---------------------------------------------------
     c.setPageSize(landscape(letter))
     width, height = landscape(letter)
     _title("Costs & Trends — Summary", height - 0.7 * inch, 18)
     c.setFont("Helvetica", 10)
 
-    # Base DFs from filtered_dfs
-    df_wo = filtered_dfs.get("Workorders", pd.DataFrame())
+    # Base DF from filtered_dfs (Workorders.parquet)
+    df_wo = filtered_dfs.get("workorders", pd.DataFrame()).copy()
 
-    # --- Find key columns in Transactions ---
-    # FORCE complete cost = TOTAL ITEM COST + Total cost when available
-    item_col_tx = _find(df_tx, "TOTAL ITEM COST")
-    totl_col_tx = _find(df_tx, "Total cost")
+    # --- Find key columns in Workorders ---
+    loc_col_wo  = _find(df_wo, "Location", "Location2", "NS Location", "location")
+    date_col_wo = _find(df_wo, "Completed On", "Completed on", "Completed", "Date", "Service date", "Created On", "Created on")
+    item_col    = _find(df_wo, "TOTAL ITEM COST", "Total Item Cost", "total item cost", "TotalItemCost")
+    totl_col    = _find(df_wo, "Total cost", "Total Cost", "TOTAL COST", "total cost", "TotalCost")
 
-    if item_col_tx and totl_col_tx:
-        df_tx["__pdf_cost"] = (
-            pd.to_numeric(df_tx[item_col_tx], errors="coerce").fillna(0.0)
-            + pd.to_numeric(df_tx[totl_col_tx], errors="coerce").fillna(0.0)
-        ).astype(float)
-        cost_col = "__pdf_cost"
-    else:
-        # fallback to existing single cost columns if the pair isn't present
-        cost_col = _find(
-            df_tx,
-            "_COST", "_Cost", "Cost", "total_cost",
-            "Ext Cost", "Extended Cost", "Value",
-        )
+    # Require the known cost definition
+    if not item_col or not totl_col:
+        raise ValueError("Workorders cost columns not found: need 'TOTAL ITEM COST' and 'Total cost' (case-insensitive).")
 
-    loc_col_tx = _find(df_tx, "Location")
-    date_col_tx = _find(df_tx, "COMPLETED ON")
+    # Build true cost (no _Cost fallback)
+    df_wo["__pdf_cost"] = (
+        pd.to_numeric(df_wo[item_col], errors="coerce").fillna(0.0)
+        + pd.to_numeric(df_wo[totl_col], errors="coerce").fillna(0.0)
+    ).astype(float)
 
-    # Safety: if we still didn't find a cost column, create zeros so we don't crash
-    if not cost_col:
-        df_tx["__pdf_cost"] = 0.0
-        cost_col = "__pdf_cost"
+    # --- Apply location + date filters to Workorders for this report window ---
+    df_wo_scoped = df_wo.copy()
 
-
-    # --- Apply location + date filters to Transactions for this report window ---
-    df_tx_scoped = df_tx.copy()
-    df_tx_scoped[cost_col] = pd.to_numeric(df_tx_scoped[cost_col], errors="coerce").fillna(0.0)
-
-
-    if loc_col_tx and locations:
+    if loc_col_wo and locations:
         allowed_locs = {str(x).strip() for x in locations}
-        df_tx_scoped = df_tx_scoped[
-            df_tx_scoped[loc_col_tx].astype(str).str.strip().isin(allowed_locs)
+        df_wo_scoped = df_wo_scoped[
+            df_wo_scoped[loc_col_wo].astype(str).str.strip().isin(allowed_locs)
         ]
 
-    if date_col_tx in df_tx_scoped.columns:
-        df_tx_scoped[date_col_tx] = pd.to_datetime(df_tx_scoped[date_col_tx], errors="coerce")
+    if date_col_wo in df_wo_scoped.columns:
+        df_wo_scoped[date_col_wo] = pd.to_datetime(df_wo_scoped[date_col_wo], errors="coerce")
         if start_date and end_date:
-            df_tx_scoped = df_tx_scoped[
-                (df_tx_scoped[date_col_tx] >= pd.to_datetime(start_date)) &
-                (df_tx_scoped[date_col_tx] <= pd.to_datetime(end_date))
+            df_wo_scoped = df_wo_scoped[
+                (df_wo_scoped[date_col_wo] >= pd.to_datetime(start_date)) &
+                (df_wo_scoped[date_col_wo] <= pd.to_datetime(end_date))
             ]
+
+    # From here on, use df_wo_scoped + "__pdf_cost" for totals/pivots
+    # Example:
+    # window_total = df_wo_scoped["__pdf_cost"].sum()
+
      
         # --- Build a YTD frame (Jan 1 -> end_date) for the same locations ---
     df_tx_ytd = df_tx.copy()
