@@ -1740,7 +1740,7 @@ def build_reporting_hub_pdf(
         return pd.DataFrame()
 
     # Base DF should be Workorders.parquet via the app's "costs_trends" dataset key
-    df_wo = _get_df_any_key(filtered_dfs, "costs_trends", "workorders", "Workorders").copy()
+    df_wo = filtered_dfs.get("costs_trends", pd.DataFrame()).copy()
 
     # last resort: session cache (only if present)
     if (df_wo is None) or df_wo.empty:
@@ -7665,17 +7665,25 @@ elif current_page == "📄 PDF Report":
         return df.loc[mask].copy()
 
     # ---------- base frames from dfs ----------
-    # Workorders are the source of truth for the Costs & Trends YTD tables (same logic as the Costs & Trends tab).
-    df_wo_pdf       = dfs.get("Workorders", pd.DataFrame())
-    df_parts_pdf    = dfs.get("parts", pd.DataFrame())
-    df_tx_pdf       = dfs.get("transactions", pd.DataFrame())
+    # Workorders.parquet lives in dfs["costs_trends"] in your app
+    df_costs_pdf = dfs.get("costs_trends", pd.DataFrame())
+    df_parts_pdf = dfs.get("parts", pd.DataFrame())
+    df_tx_pdf    = dfs.get("transactions", pd.DataFrame())
     df_expected_pdf = dfs.get("expected", pd.DataFrame())
 
     # ---------- apply *location* filter ----------
-    df_wo_pdf       = _filter_by_locations(df_wo_pdf, selected_locations)
+    df_costs_pdf    = _filter_by_locations(df_costs_pdf, selected_locations)
     df_parts_pdf    = _filter_by_locations(df_parts_pdf, selected_locations)
     df_tx_pdf       = _filter_by_locations(df_tx_pdf, selected_locations)
     df_expected_pdf = _filter_by_locations(df_expected_pdf, selected_locations)
+
+    filtered_dfs_pdf = {
+        "costs_trends": df_costs_pdf,     # <-- THIS is Workorders.parquet
+        "parts": df_parts_pdf,
+        "transactions": df_tx_pdf,
+        "expected": df_expected_pdf,
+    }
+
 
     # ---------- build Costs & Trends table: YTD Summary by Location ----------
     def _first_present(df: pd.DataFrame, candidates: list[str]) -> str | None:
