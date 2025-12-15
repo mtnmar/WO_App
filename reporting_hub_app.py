@@ -1276,7 +1276,7 @@ def build_reporting_hub_pdf(
         df_parts = pd.DataFrame()
         
     # Work Orders DF for asset YTD summary
-    df_wo = filtered_dfs.get("workorders", None)
+    df_wo = filtered_dfs.get("Workorders", None)
     if df_wo is None:
         df_wo = pd.DataFrame()
 
@@ -1725,7 +1725,7 @@ def build_reporting_hub_pdf(
     c.setFont("Helvetica", 10)
 
     # Base DFs from filtered_dfs
-    df_wo = filtered_dfs.get("workorders", pd.DataFrame())
+    df_wo = filtered_dfs.get("Workorders", pd.DataFrame())
 
     # --- Find key columns in Transactions ---
     # FORCE complete cost = TOTAL ITEM COST + Total cost when available
@@ -7634,7 +7634,7 @@ elif current_page == "↕ Transactions":
 # --- Work Orders Report ---
 elif current_page == "🧾 Work Orders":
     render_wo_report(
-        df_wo=dfs.get("workorders", pd.DataFrame()),
+        df_wo=dfs.get("Workorders", pd.DataFrame()),
         start_date=start_date,
         end_date=end_date,
         selected_locations=selected_locations,
@@ -7679,7 +7679,7 @@ elif current_page == "📄 PDF Report":
 
     # ---------- base frames from dfs ----------
     # Workorders are the source of truth for the Costs & Trends YTD tables (same logic as the Costs & Trends tab).
-    df_wo_pdf       = dfs.get("workorders", pd.DataFrame())
+    df_wo_pdf       = dfs.get("Workorders", pd.DataFrame())
     df_parts_pdf    = dfs.get("parts", pd.DataFrame())
     df_tx_pdf       = dfs.get("transactions", pd.DataFrame())
     df_expected_pdf = dfs.get("expected", pd.DataFrame())
@@ -7781,7 +7781,7 @@ elif current_page == "📄 PDF Report":
         ["DueDate", "Expected Date", "Date"],
     )
     filtered_dfs_pdf = {
-        "workorders": df_wo_pdf,
+        "Workorders": df_wo_pdf,
         "costs_trends": df_costs_pdf,
         "parts": df_parts_pdf,
         "transactions": df_tx_pdf,
