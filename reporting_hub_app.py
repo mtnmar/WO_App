@@ -1725,17 +1725,35 @@ def build_reporting_hub_pdf(
     c.setFont("Helvetica", 10)
 
     # Base DFs from filtered_dfs
-    df_tx = filtered_dfs.get("transactions", pd.DataFrame())
     df_wo = filtered_dfs.get("workorders", pd.DataFrame())
 
     # --- Find key columns in Transactions ---
-    cost_col = _find(
-        df_tx,
-        "_COST", "Cost", "total_cost", "TOTAL COST",
-        "Ext Cost", "Extended Cost", "Value",
-    )
+    # FORCE complete cost = TOTAL ITEM COST + Total cost when available
+    item_col_tx = _find(df_tx, "TOTAL ITEM COST", "Total Item Cost", "total item cost", "TotalItemCost")
+    totl_col_tx = _find(df_tx, "Total cost", "TOTAL COST", "Total Cost", "total cost", "TotalCost")
+
+    if item_col_tx and totl_col_tx:
+        df_tx["__pdf_cost"] = (
+            pd.to_numeric(df_tx[item_col_tx], errors="coerce").fillna(0.0)
+            + pd.to_numeric(df_tx[totl_col_tx], errors="coerce").fillna(0.0)
+        ).astype(float)
+        cost_col = "__pdf_cost"
+    else:
+        # fallback to existing single cost columns if the pair isn't present
+        cost_col = _find(
+            df_tx,
+            "_COST", "_Cost", "Cost", "total_cost",
+            "Ext Cost", "Extended Cost", "Value",
+        )
+
     loc_col_tx = _find(df_tx, "Location", "Location2", "loc", "NS Location")
     date_col_tx = _find(df_tx, "Completed On", "Completed on", "Date", "TransDate", "Created On")
+
+    # Safety: if we still didn't find a cost column, create zeros so we don't crash
+    if not cost_col:
+        df_tx["__pdf_cost"] = 0.0
+        cost_col = "__pdf_cost"
+
 
     # --- Apply location + date filters to Transactions for this report window ---
     df_tx_scoped = df_tx.copy()
