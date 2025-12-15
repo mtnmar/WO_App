@@ -1942,16 +1942,42 @@ def build_reporting_hub_pdf(
     if df_asset is not None and not df_asset.empty:
         df_asset = _fmt_currency(df_asset, skip_first=True)
 
-    top_y_asset = height - 1.8 * inch
-    _draw_table_paged(
-        df_asset,
-        x=0.75 * inch,
-        top_y=top_y_asset,
-        max_width=width - 1.5 * inch,
-        bottom_margin=0.7 * inch,
-        font_size=6,
-        page_title="YTD Summary by Asset",
-    )
+    top_y = height - 1.8 * inch
+
+    MAX_TX_ROWS_PER_PAGE = 10
+    # <--- your target (does NOT count header)
+
+    if base_tx is None or base_tx.empty:
+        c.drawString(0.75 * inch, top_y, "No transactions in this window.")
+        c.showPage()
+    else:
+        base_tx = base_tx.reset_index(drop=True)
+        total_rows = len(base_tx)
+        start_i = 0
+        page_n = 1
+
+        while start_i < total_rows:
+            chunk = base_tx.iloc[start_i:start_i + MAX_TX_ROWS_PER_PAGE].copy()
+
+            _draw_table_paged(
+                chunk,
+                x=0.5 * inch,
+                top_y=top_y,
+                max_width=width - 1.0 * inch,
+                bottom_margin=0.7 * inch,
+                font_size=6,
+                page_title=f"Transactions — Filtered Detail (p{page_n})",
+            )
+
+            start_i += MAX_TX_ROWS_PER_PAGE
+            page_n += 1
+
+            if start_i < total_rows:
+                c.showPage()
+                c.setPageSize(landscape(letter))
+                width, height = landscape(letter)
+                _title("Transactions — Filtered Detail (cont.)", height - 0.7 * inch, 18)
+                c.setFont("Helvetica", 9)
     c.showPage()
 
     # ---------------------------------------------------
@@ -2015,7 +2041,8 @@ def build_reporting_hub_pdf(
 
     top_y = height - 1.8 * inch
 
-    MAX_TX_ROWS_PER_PAGE = 11  # <--- your target (does NOT count header)
+    MAX_TX_ROWS_PER_PAGE = 10
+    # <--- your target (does NOT count header)
 
     if base_tx is None or base_tx.empty:
         c.drawString(0.75 * inch, top_y, "No transactions in this window.")
