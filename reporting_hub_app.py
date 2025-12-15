@@ -2127,7 +2127,7 @@ else:
 
     if df_expected is None or df_expected.empty:
         c.save()
-        return buf.getvalue()
+    return buf.getvalue()
 
     # ---- Build a slim Expected matrix similar to the page view ----
     dfE = df_expected.copy()
