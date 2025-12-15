@@ -2091,7 +2091,7 @@ def build_reporting_hub_pdf(
         ("Completed in Window", "completed", "completed_count", None),
     ]
 
-    MAX_ROWS_PER_PAGE = 9  # <-- tune as needed (does NOT count header)
+    MAX_ROWS_PER_PAGE = 10  # <-- tune as needed (does NOT count header)
 
     for label, tbl_key, count_key, avg_key in wo_blocks:
         c.setPageSize(landscape(letter))
