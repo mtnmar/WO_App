@@ -7743,12 +7743,37 @@ elif current_page == "📄 PDF Report":
 
     if st.button("Generate PDF report", type="primary"):
         with st.spinner("Building PDF report..."):
-            pdf_bytes = build_reporting_hub_pdf(
-                filtered_dfs=filtered_dfs_pdf,
-                date_range=(start_date, end_date),
-                locations=selected_locations,
-            )
-            if pdf_bytes:
+
+            # --- SANITY: show which keys exist + row counts ---
+            try:
+                st.write("PDF input keys:", list(filtered_dfs_pdf.keys()))
+                for k, v in filtered_dfs_pdf.items():
+                    if hasattr(v, "shape"):
+                        st.write(f"• {k}: {v.shape[0]:,} rows × {v.shape[1]:,} cols")
+                    else:
+                        st.write(f"• {k}: {type(v)}")
+            except Exception:
+                pass
+
+            pdf_bytes = b""
+            try:
+                pdf_bytes = build_reporting_hub_pdf(
+                    filtered_dfs=filtered_dfs_pdf,
+                    date_range=(start_date, end_date),
+                    locations=selected_locations,
+                )
+            except Exception as e:
+                st.exception(e)
+                pdf_bytes = b""
+
+            # --- GUARANTEE bytes ---
+            if pdf_bytes is None:
+                pdf_bytes = b""
+
+            # If the builder returned empty, show why and stop
+            if len(pdf_bytes) < 50:  # a real PDF is usually much larger than this
+                st.error("PDF generation returned no data (empty bytes). This usually means the PDF builder hit an early return or never called c.save().")
+            else:
                 st.download_button(
                     "⬇️ Download PDF",
                     data=pdf_bytes,
@@ -7756,8 +7781,7 @@ elif current_page == "📄 PDF Report":
                     mime="application/pdf",
                     use_container_width=True,
                 )
-            else:
-                st.error("PDF generation returned no data.")
+
 
 
 
