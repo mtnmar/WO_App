@@ -1827,7 +1827,6 @@ def build_reporting_hub_pdf(
             tmp = df_ytd[[loc_col, "__pdf_cost"]].copy()
             tmp["__Month"] = pd.to_datetime(df_ytd[date_col], errors="coerce").dt.month if date_col else np.nan
 
-            # Pivot to Jan..Dec then rename months
             p = tmp.pivot_table(
                 index=loc_col,
                 columns="__Month",
@@ -1836,13 +1835,11 @@ def build_reporting_hub_pdf(
                 fill_value=0.0,
             )
 
-            # ensure 1..12 exist
             for mm in range(1, 13):
                 if mm not in p.columns:
                     p[mm] = 0.0
             p = p[[mm for mm in range(1, 13)]]
 
-            # YTD total numeric
             p["YTD Total"] = p.sum(axis=1)
             p = p.reset_index()
 
@@ -1853,10 +1850,9 @@ def build_reporting_hub_pdf(
             p = p.rename(columns=month_names)
             ytd_loc = p
 
-        # ✅ Reorder columns to: Location, YTD Total, current month, previous month, ...
+        # Reorder columns to: Location, YTD Total, current month, previous month, ...
         if ytd_loc is not None and not ytd_loc.empty and ("YTD Total" in ytd_loc.columns):
             import calendar as _cal
-
             cur_m = int(end_date.month) if end_date else int(date.today().month)
             mon_order = [_cal.month_abbr[m] for m in range(cur_m, 0, -1)] + \
                         [_cal.month_abbr[m] for m in range(12, cur_m, -1)]
@@ -1866,15 +1862,12 @@ def build_reporting_hub_pdf(
             remaining = [c for c in ytd_loc.columns if c not in (base_cols + month_cols)]
             ytd_loc = ytd_loc[base_cols + month_cols + remaining]
 
-            # ✅ Sort rows highest -> lowest by numeric YTD Total
             y = pd.to_numeric(ytd_loc["YTD Total"], errors="coerce").fillna(0.0)
             ytd_loc = ytd_loc.loc[y.sort_values(ascending=False).index].reset_index(drop=True)
 
-        # Format AFTER ordering/sorting
         if ytd_loc is not None and not ytd_loc.empty:
             ytd_loc = _fmt_currency(ytd_loc, skip_first=True)
 
-        # Draw table
         y_top = height - 2.1 * inch
         _sub("YTD Summary by Location", y_top, 12)
         y_loc = y_top - 0.3 * inch
@@ -1888,80 +1881,8 @@ def build_reporting_hub_pdf(
             font_size=6,
         )
 
-        # finish the Costs & Trends summary page
         c.showPage()
 
-
-        # ---------------------------------------------------
-        # 3b) YTD SUMMARY BY ASSET — OWN PAGE (Workorders only)
-        #     Column order: YTD Total, current month, previous month, ...
-        # ---------------------------------------------------
-        c.setPageSize(landscape(letter))
-        width, height = landscape(letter)
-        _title("YTD Summary by Asset", height - 0.7 * inch, 18)
-        c.setFont("Helvetica", 10)
-
-        asset_col = _find(df_ytd, "Asset", "Asset Name", "Name", "Equipment", "Equipment #", "Equipment")
-        df_asset = pd.DataFrame()
-
-        if (df_ytd is not None) and (not df_ytd.empty) and asset_col:
-            # Build base table (Asset, Month, Cost)
-            t2 = df_ytd[[asset_col, "__pdf_cost"]].copy()
-            if date_col:
-                t2["__Month"] = pd.to_datetime(df_ytd[date_col], errors="coerce").dt.month
-            else:
-                t2["__Month"] = np.nan
-
-            # Pivot to Jan..Dec columns + YTD Total
-            p2 = t2.pivot_table(
-                index=asset_col,
-                columns="__Month",
-                values="__pdf_cost",
-                aggfunc="sum",
-                fill_value=0.0
-            )
-
-            # Ensure month columns 1..12 exist
-            for m in range(1, 13):
-                if m not in p2.columns:
-                    p2[m] = 0.0
-            p2 = p2[[m for m in range(1, 13)]]
-
-            # Add YTD Total, reset index, rename month numbers -> abbreviations
-            p2["YTD Total"] = p2.sum(axis=1)
-            p2 = p2.reset_index()
-
-            month_names = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
-            p2 = p2.rename(columns=month_names)
-
-            # Sort by YTD Total (HIGH -> LOW)
-            p2["YTD Total"] = pd.to_numeric(p2["YTD Total"], errors="coerce").fillna(0.0)
-            p2 = p2.sort_values("YTD Total", ascending=False)
-
-            # Reorder columns: Asset, YTD Total, current month, previous month, ... (wrap)
-            cur_m = int(end_date.month) if end_date else 12
-            month_cycle = [month_names[m] for m in range(cur_m, 0, -1)] + [month_names[m] for m in range(12, cur_m, -1)]
-            month_cols = [m for m in month_cycle if m in p2.columns]
-
-            ordered_cols = [asset_col, "YTD Total"] + month_cols
-            df_asset = p2[ordered_cols].copy()
-
-        # Format
-        if df_asset is not None and not df_asset.empty:
-            df_asset = _fmt_currency(df_asset, skip_first=True)
-
-        top_y_asset = height - 1.8 * inch
-        _draw_table_paged(
-            df_asset,
-            x=0.75 * inch,
-            top_y=top_y_asset,
-            max_width=width - 1.5 * inch,
-            bottom_margin=0.7 * inch,
-            font_size=6,
-            page_title="YTD Summary by Asset",
-        )
-
-        c.showPage()
 
 
     # ---------------------------------------------------
