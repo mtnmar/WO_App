@@ -7695,20 +7695,27 @@ elif current_page == "📄 PDF Report":
 
         dfw[date_col] = pd.to_datetime(dfw[date_col], errors="coerce")
 
-        # cost column: prefer helper _Cost
-        if "_Cost" in dfw.columns:
+        # Cost column (FORCE: Total Item Cost + Total Cost when available)
+        def _num(s):
+            return pd.to_numeric(s, errors="coerce").fillna(0.0)
+
+        item_col = _first_present(df, ["Total Item Cost","TOTAL ITEM COST","total item cost","item total","item_total","TotalItemCost"])
+        totl_col = _first_present(df, ["Total cost","Total Cost","TOTAL COST","total cost","cost total","cost_total","TotalCost"])
+
+        if item_col and totl_col:
+            df["__cost_sum"] = (_num(df[item_col]) + _num(df[totl_col])).astype(float)
+            cost_col = "__cost_sum"
+        elif "_Cost" in df.columns:
             cost_col = "_Cost"
-        elif "__cost" in dfw.columns:
+        elif "__cost" in df.columns:
             cost_col = "__cost"
         else:
-            item_col = _first_present(dfw, ["TOTAL ITEM COST"])
-            totl_col = _first_present(dfw, ["Total cost"])
-            item_cost = pd.to_numeric(dfw[item_col], errors="coerce").fillna(0.0) if item_col else 0.0
-            totl_cost = pd.to_numeric(dfw[totl_col], errors="coerce").fillna(0.0) if totl_col else 0.0
-            dfw["__cost"] = (item_cost + totl_cost).astype(float)
+            # last resort: try to build from whatever exists (may be zeros)
+            df["__cost"] = (_num(df[item_col]) if item_col else 0.0) + (_num(df[totl_col]) if totl_col else 0.0)
             cost_col = "__cost"
 
-        dfw[cost_col] = pd.to_numeric(dfw[cost_col], errors="coerce").fillna(0.0)
+        df[cost_col] = pd.to_numeric(df[cost_col], errors="coerce").fillna(0.0)
+
 
         # year scope = full Jan–Dec for the master year
         dfw = dfw[dfw[date_col].dt.year == year_i].copy()
