@@ -1729,8 +1729,8 @@ def build_reporting_hub_pdf(
 
     # --- Find key columns in Transactions ---
     # FORCE complete cost = TOTAL ITEM COST + Total cost when available
-    item_col_tx = _find(df_tx, "TOTAL ITEM COST", "Total Item Cost", "total item cost", "TotalItemCost")
-    totl_col_tx = _find(df_tx, "Total cost", "TOTAL COST", "Total Cost", "total cost", "TotalCost")
+    item_col_tx = _find(df_tx, "TOTAL ITEM COST")
+    totl_col_tx = _find(df_tx, "Total cost")
 
     if item_col_tx and totl_col_tx:
         df_tx["__pdf_cost"] = (
