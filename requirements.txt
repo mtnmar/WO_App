@@ -11,5 +11,6 @@ streamlit-authenticator
 bcrypt
 PyMuPDF
 Pillow
+python-docx
 requests
 
