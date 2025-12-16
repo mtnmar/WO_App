@@ -3890,13 +3890,30 @@ def _render_inventory_analysis(df_parts, df_tx, start_date, end_date, locations)
                 rw[3].text = f"${float(rr['Sum $'] if 'Sum $' in reasons_tbl.columns else rr['Amount_Sum']):,.2f}"
                 rw[4].text = f"{float(rr['% by Amount']):.2f}%"
         bio = io.BytesIO(); doc.save(bio)
-        st.download_button(
-            "Download KPI Word Report (current filter)",
-            data=bio.getvalue(),
-            file_name=f"Inventory_KPI_Report_{pick_loc.replace(' ','_')}_{period_tag}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True
-        )
+        # --- Word download (robust) ---
+        import io  # ensure available in this scope
+
+        def _docx_to_bytes(_doc):
+            """Return docx bytes safely."""
+            _bio = io.BytesIO()
+            _doc.save(_bio)
+            _bio.seek(0)
+            return _bio.getvalue()
+
+        try:
+            docx_bytes = _docx_to_bytes(doc)
+            safe_loc = (pick_loc or "All").replace(" ", "_")
+            st.download_button(
+                "Download KPI Word Report (current filter)",
+                data=docx_bytes,
+                file_name=f"Inventory_KPI_Report_{safe_loc}_{period_tag}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+                key=f"inv_kpi_docx_{safe_loc}_{period_tag}",
+            )
+        except Exception as e:
+            st.error(f"Word export failed: {type(e).__name__}: {e}")
+
     elif not DOCX_AVAILABLE:
         st.caption("Word export unavailable (python-docx not installed).")
 
