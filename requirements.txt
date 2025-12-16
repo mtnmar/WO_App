@@ -4,9 +4,12 @@ numpy
 matplotlib
 reportlab
 openpyxl
-xlsxwriter
+XlsxWriter
 pyarrow
 python-docx
 streamlit-authenticator
 bcrypt
+PyMuPDF
+Pillow
+requests
 
