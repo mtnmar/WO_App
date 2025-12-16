@@ -3826,171 +3826,171 @@ def _render_inventory_analysis(df_parts, df_tx, start_date, end_date, locations)
     )
 
 
-# ---------- Word export ----------
-DOCX_AVAILABLE = False
-try:
-    import io
-    from docx import Document
-    from docx.shared import Pt
-    from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
-    DOCX_AVAILABLE = True
-except Exception:
+    # ---------- Word export ----------
     DOCX_AVAILABLE = False
-
-def _safe_num(x, fmt=".2f", suffix=""):
-    """Format numeric-ish values safely (handles None/NaN)."""
     try:
-        if x is None or (hasattr(np, "isnan") and np.isnan(x)):
-            return f"{0:{fmt}}{suffix}"
-        return f"{float(x):{fmt}}{suffix}"
+        import io
+        from docx import Document
+        from docx.shared import Pt
+        from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+        DOCX_AVAILABLE = True
     except Exception:
-        return f"{0:{fmt}}{suffix}"
+        DOCX_AVAILABLE = False
 
-def _docx_to_bytes(_doc):
-    """Return docx bytes safely."""
-    _bio = io.BytesIO()
-    _doc.save(_bio)
-    _bio.seek(0)
-    return _bio.getvalue()
+    def _safe_num(x, fmt=".2f", suffix=""):
+        """Format numeric-ish values safely (handles None/NaN)."""
+        try:
+            if x is None or (hasattr(np, "isnan") and np.isnan(x)):
+                return f"{0:{fmt}}{suffix}"
+            return f"{float(x):{fmt}}{suffix}"
+        except Exception:
+            return f"{0:{fmt}}{suffix}"
 
-if DOCX_AVAILABLE and (out is not None) and (not out.empty):
-    try:
-        # --- Build outliers table (safe if columns missing) ---
-        if (
-            "Error Rate vs Inv Value %" in out.columns
-            and "Gap (Net IO − Net Trans) $" in out.columns
-            and "Period" in out.columns
-        ):
-            outliers = (
-                out.loc[out["Error Rate vs Inv Value %"].abs() >= 1,
-                        ["Period", "Error Rate vs Inv Value %", "Gap (Net IO − Net Trans) $"]]
-                .sort_values(by="Gap (Net IO − Net Trans) $", key=lambda s: s.abs(), ascending=False)
+    def _docx_to_bytes(_doc):
+        """Return docx bytes safely."""
+        _bio = io.BytesIO()
+        _doc.save(_bio)
+        _bio.seek(0)
+        return _bio.getvalue()
+
+    if DOCX_AVAILABLE and (out is not None) and (not out.empty):
+        try:
+            # --- Build outliers table (safe if columns missing) ---
+            if (
+                "Error Rate vs Inv Value %" in out.columns
+                and "Gap (Net IO − Net Trans) $" in out.columns
+                and "Period" in out.columns
+            ):
+                outliers = (
+                    out.loc[out["Error Rate vs Inv Value %"].abs() >= 1,
+                            ["Period", "Error Rate vs Inv Value %", "Gap (Net IO − Net Trans) $"]]
+                    .sort_values(by="Gap (Net IO − Net Trans) $", key=lambda s: s.abs(), ascending=False)
+                )
+            else:
+                outliers = pd.DataFrame(columns=["Period", "Error Rate vs Inv Value %", "Gap (Net IO − Net Trans) $"])
+
+            # --- Create document ---
+            doc = Document()
+
+            # Title
+            loc_txt = str(loc_label_for_display) if ("loc_label_for_display" in locals() and loc_label_for_display) else "All"
+            per_txt = str(period_mode) if ("period_mode" in locals() and period_mode) else ""
+            title = f"Inventory KPI Report — {loc_txt}" + (f" — {per_txt}" if per_txt else "")
+            ttl = doc.add_paragraph()
+            run = ttl.add_run(title)
+            try:
+                run.bold = True
+                run.font.size = Pt(14)
+            except Exception:
+                pass
+
+            # Summary paragraph
+            doc.add_paragraph(
+                f"PO/WO coverage (NET): {_safe_num(coverage_net)}%. "
+                f"PO/WO coverage (ABS): {_safe_num(coverage_abs_pct)}%. "
+                f"Adjustments/unmatched (NET): {_safe_num(gap_share_net)}%. "
+                f"Average error rate: {_safe_num(avg_err)}%."
             )
-        else:
-            outliers = pd.DataFrame(columns=["Period", "Error Rate vs Inv Value %", "Gap (Net IO − Net Trans) $"])
 
-        # --- Create document ---
-        doc = Document()
+            # Optional reopen %
+            try:
+                if (reopen_pct_of_wo is not None) and (not np.isnan(reopen_pct_of_wo)):
+                    doc.add_paragraph(f"Reopen % of WO activity (ABS): {float(reopen_pct_of_wo):.2f}%.")
+            except Exception:
+                pass
 
-        # Title
-        loc_txt = str(loc_label_for_display) if ("loc_label_for_display" in locals() and loc_label_for_display) else "All"
-        per_txt = str(period_mode) if ("period_mode" in locals() and period_mode) else ""
-        title = f"Inventory KPI Report — {loc_txt}" + (f" — {per_txt}" if per_txt else "")
-        ttl = doc.add_paragraph()
-        run = ttl.add_run(title)
-        try:
-            run.bold = True
-            run.font.size = Pt(14)
-        except Exception:
-            pass
+            # KPI table
+            t = doc.add_table(rows=1, cols=4)
+            h = t.rows[0].cells
+            h[0].text, h[1].text, h[2].text, h[3].text = "KPI", "Current", "Target", "Flag"
 
-        # Summary paragraph
-        doc.add_paragraph(
-            f"PO/WO coverage (NET): {_safe_num(coverage_net)}%. "
-            f"PO/WO coverage (ABS): {_safe_num(coverage_abs_pct)}%. "
-            f"Adjustments/unmatched (NET): {_safe_num(gap_share_net)}%. "
-            f"Average error rate: {_safe_num(avg_err)}%."
-        )
+            rows = [
+                ("YTD / Period Growth %", f"{_safe_num(pct_total)}%", "0–10% (plan)", "Red if < -5% or > 20%"),
+                ("Avg MoM Δ %", f"{_safe_num(avg_mom)}%", "≤ 2%", "Red if > 4%"),
+                ("PO/WO Coverage (NET %)", f"{_safe_num(coverage_net)}%", "≥ 95%", "Red if < 90%"),
+                ("PO/WO Coverage (ABS %)", f"{_safe_num(coverage_abs_pct)}%", "≥ 95%", "Red if < 90%"),
+                ("Adj/Unmatched (NET %)", f"{_safe_num(gap_share_net)}%", "≤ 15%", "Red if > 20%"),
+                ("Avg Error Rate %", f"{_safe_num(avg_err)}%", "≤ 0.50% (stretch 0.25%)", "Red if ≥ 1.00%"),
+            ]
+            for k, cur, tgt, flg in rows:
+                r = t.add_row().cells
+                r[0].text, r[1].text, r[2].text, r[3].text = k, cur, tgt, flg
 
-        # Optional reopen %
-        try:
-            if (reopen_pct_of_wo is not None) and (not np.isnan(reopen_pct_of_wo)):
-                doc.add_paragraph(f"Reopen % of WO activity (ABS): {float(reopen_pct_of_wo):.2f}%.")
-        except Exception:
-            pass
-
-        # KPI table
-        t = doc.add_table(rows=1, cols=4)
-        h = t.rows[0].cells
-        h[0].text, h[1].text, h[2].text, h[3].text = "KPI", "Current", "Target", "Flag"
-
-        rows = [
-            ("YTD / Period Growth %", f"{_safe_num(pct_total)}%", "0–10% (plan)", "Red if < -5% or > 20%"),
-            ("Avg MoM Δ %", f"{_safe_num(avg_mom)}%", "≤ 2%", "Red if > 4%"),
-            ("PO/WO Coverage (NET %)", f"{_safe_num(coverage_net)}%", "≥ 95%", "Red if < 90%"),
-            ("PO/WO Coverage (ABS %)", f"{_safe_num(coverage_abs_pct)}%", "≥ 95%", "Red if < 90%"),
-            ("Adj/Unmatched (NET %)", f"{_safe_num(gap_share_net)}%", "≤ 15%", "Red if > 20%"),
-            ("Avg Error Rate %", f"{_safe_num(avg_err)}%", "≤ 0.50% (stretch 0.25%)", "Red if ≥ 1.00%"),
-        ]
-        for k, cur, tgt, flg in rows:
-            r = t.add_row().cells
-            r[0].text, r[1].text, r[2].text, r[3].text = k, cur, tgt, flg
-
-        # Outliers
-        doc.add_paragraph("")
-        doc.add_paragraph("Outlier Months (Error Rate ≥ 1.00%):")
-        if outliers is not None and (not outliers.empty):
-            t2 = doc.add_table(rows=1, cols=3)
-            hh = t2.rows[0].cells
-            hh[0].text, hh[1].text, hh[2].text = "Period", "Error Rate %", "Gap $"
-            for _, rr in outliers.iterrows():
-                rw = t2.add_row().cells
-                rw[0].text = str(rr.get("Period", ""))
-                try:
-                    rw[1].text = f"{float(rr.get('Error Rate vs Inv Value %', 0.0)):.3f}%"
-                except Exception:
-                    rw[1].text = "0.000%"
-                try:
-                    rw[2].text = f"${float(rr.get('Gap (Net IO − Net Trans) $', 0.0)):,.2f}"
-                except Exception:
-                    rw[2].text = "$0.00"
-        else:
-            doc.add_paragraph("None.")
-
-        # Reasons table (optional)
-        if ("reasons_tbl" in locals()) and (reasons_tbl is not None) and (not reasons_tbl.empty):
+            # Outliers
             doc.add_paragraph("")
-            doc.add_paragraph("Transaction Reasons (current filter):")
-            t3 = doc.add_table(rows=1, cols=5)
-            hh = t3.rows[0].cells
-            hh[0].text, hh[1].text, hh[2].text, hh[3].text, hh[4].text = "Reason", "Count", "% by Count", "Sum $", "% by Amount"
+            doc.add_paragraph("Outlier Months (Error Rate ≥ 1.00%):")
+            if outliers is not None and (not outliers.empty):
+                t2 = doc.add_table(rows=1, cols=3)
+                hh = t2.rows[0].cells
+                hh[0].text, hh[1].text, hh[2].text = "Period", "Error Rate %", "Gap $"
+                for _, rr in outliers.iterrows():
+                    rw = t2.add_row().cells
+                    rw[0].text = str(rr.get("Period", ""))
+                    try:
+                        rw[1].text = f"{float(rr.get('Error Rate vs Inv Value %', 0.0)):.3f}%"
+                    except Exception:
+                        rw[1].text = "0.000%"
+                    try:
+                        rw[2].text = f"${float(rr.get('Gap (Net IO − Net Trans) $', 0.0)):,.2f}"
+                    except Exception:
+                        rw[2].text = "$0.00"
+            else:
+                doc.add_paragraph("None.")
 
-            for _, rr in reasons_tbl.iterrows():
-                rw = t3.add_row().cells
-                rw[0].text = str(rr.get("TRANSACTION REASON", "") or "(blank)")
-                try:
-                    rw[1].text = f"{int(rr.get('Count', 0))}"
-                except Exception:
-                    rw[1].text = "0"
-                try:
-                    rw[2].text = f"{float(rr.get('% by Count', 0.0)):.2f}%"
-                except Exception:
-                    rw[2].text = "0.00%"
+            # Reasons table (optional)
+            if ("reasons_tbl" in locals()) and (reasons_tbl is not None) and (not reasons_tbl.empty):
+                doc.add_paragraph("")
+                doc.add_paragraph("Transaction Reasons (current filter):")
+                t3 = doc.add_table(rows=1, cols=5)
+                hh = t3.rows[0].cells
+                hh[0].text, hh[1].text, hh[2].text, hh[3].text, hh[4].text = "Reason", "Count", "% by Count", "Sum $", "% by Amount"
 
-                # Sum field name varies
-                sum_val = rr.get("Sum $", None)
-                if sum_val is None and "Amount_Sum" in rr:
-                    sum_val = rr.get("Amount_Sum", 0.0)
-                try:
-                    rw[3].text = f"${float(sum_val if sum_val is not None else 0.0):,.2f}"
-                except Exception:
-                    rw[3].text = "$0.00"
+                for _, rr in reasons_tbl.iterrows():
+                    rw = t3.add_row().cells
+                    rw[0].text = str(rr.get("TRANSACTION REASON", "") or "(blank)")
+                    try:
+                        rw[1].text = f"{int(rr.get('Count', 0))}"
+                    except Exception:
+                        rw[1].text = "0"
+                    try:
+                        rw[2].text = f"{float(rr.get('% by Count', 0.0)):.2f}%"
+                    except Exception:
+                        rw[2].text = "0.00%"
 
-                try:
-                    rw[4].text = f"{float(rr.get('% by Amount', 0.0)):.2f}%"
-                except Exception:
-                    rw[4].text = "0.00%"
+                    # Sum field name varies
+                    sum_val = rr.get("Sum $", None)
+                    if sum_val is None and "Amount_Sum" in rr:
+                        sum_val = rr.get("Amount_Sum", 0.0)
+                    try:
+                        rw[3].text = f"${float(sum_val if sum_val is not None else 0.0):,.2f}"
+                    except Exception:
+                        rw[3].text = "$0.00"
 
-        # --- Build bytes + download ---
-        docx_bytes = _docx_to_bytes(doc)
+                    try:
+                        rw[4].text = f"{float(rr.get('% by Amount', 0.0)):.2f}%"
+                    except Exception:
+                        rw[4].text = "0.00%"
 
-        safe_loc_tag = loc_txt.replace(" ", "_").replace("/", "_")
-        safe_period_tag = (str(period_tag) if ("period_tag" in locals() and period_tag) else "period").replace(" ", "_")
+            # --- Build bytes + download ---
+            docx_bytes = _docx_to_bytes(doc)
 
-        st.download_button(
-            "Download KPI Word Report (current filter)",
-            data=docx_bytes,
-            file_name=f"Inventory_KPI_Report_{safe_loc_tag}_{safe_period_tag}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True,
-            key=f"inv_kpi_docx_{safe_loc_tag}_{safe_period_tag}",
-        )
+            safe_loc_tag = loc_txt.replace(" ", "_").replace("/", "_")
+            safe_period_tag = (str(period_tag) if ("period_tag" in locals() and period_tag) else "period").replace(" ", "_")
 
-    except Exception as e:
-        st.error(f"Word export failed: {type(e).__name__}: {e}")
+            st.download_button(
+                "Download KPI Word Report (current filter)",
+                data=docx_bytes,
+                file_name=f"Inventory_KPI_Report_{safe_loc_tag}_{safe_period_tag}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+                key=f"inv_kpi_docx_{safe_loc_tag}_{safe_period_tag}",
+            )
 
-elif not DOCX_AVAILABLE:
-    st.caption("Word export unavailable (python-docx not installed).")
+        except Exception as e:
+            st.error(f"Word export failed: {type(e).__name__}: {e}")
+
+    elif not DOCX_AVAILABLE:
+        st.caption("Word export unavailable (python-docx not installed).")
 
 
     # ---------- KPI thresholds editor ----------
