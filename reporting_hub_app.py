@@ -5323,8 +5323,10 @@ def render_wo_report(
     if "Planned Start Date" in df_base.columns:
         sched_raw = sched_raw.where(pd.notna(sched_raw), df_base["Planned Start Date"])
 
-    today = _date.today()
-    sched_dt = pd.to_datetime(sched_raw, errors="coerce").dt.date
+    # Keep schedule comparisons as pandas Timestamps.
+    # Comparing a pandas datetime Series to a Python date can fail on newer pandas versions.
+    today = pd.Timestamp.today().normalize()
+    sched_dt = pd.to_datetime(sched_raw, errors="coerce").dt.normalize()
 
     mask_has_sched = sched_dt.notna()
     mask_past_or_today = mask_has_sched & (sched_dt <= today)
