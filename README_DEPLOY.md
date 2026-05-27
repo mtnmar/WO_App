@@ -1,28 +1,24 @@
-# Maintenance Reporting App - Streamlit Cloud Deploy
+# Streamlit Cloud deployment
 
-Upload this structure to the Streamlit app repo:
+Upload these files to the repo root:
 
-```text
-app.py
-reporting_shared.py
-requirements.txt
-.gitattributes
-maintenance_master.db
-pages/
-```
+- app.py
+- reporting_shared.py
+- requirements.txt
+- runtime.txt
+- .gitattributes
+- .streamlit/config.toml
+- pages/ folder
+- maintenance_master.db
 
-Important Streamlit Cloud setting:
+Streamlit Cloud settings:
 
-```text
-Main file path: app.py
-```
+- Main file path: app.py
+- Python: controlled by runtime.txt = python-3.11
 
-The database must be named exactly:
+Important:
 
-```text
-maintenance_master.db
-```
-
-and it must be in the repo root beside `app.py`.
-
-If Streamlit says only "Error running app," open **Manage app > Logs**. The updated `app.py` also checks whether the database exists and whether SQLite can open it.
+- The database must be named exactly maintenance_master.db.
+- It must be in the same folder as app.py.
+- If GitHub refuses the upload because the database is over 100 MB, the DB cannot be committed normally. Use Git LFS or a smaller DB copy.
+- This package uses minimal requirements only. The previous package included extra packages that can cause Streamlit Cloud build failures.
