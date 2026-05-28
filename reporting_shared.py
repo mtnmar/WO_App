@@ -1,23 +1,20 @@
 # reporting_shared.py
 # Shared configuration and cached database loaders for the Reporting app.
+# Cloud-safe version: reads maintenance_master.db from the GitHub repo root.
 
 from __future__ import annotations
 
 import os
 import sqlite3
+from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
 import streamlit as st
 
 
-from pathlib import Path
-
-# Streamlit Cloud / GitHub deployment:
-# Put maintenance_master.db in the repository root with this same name.
-# Local override is still available with MAINTENANCE_DB_PATH.
 APP_DIR = Path(__file__).resolve().parent
-DB_PATH = os.getenv("MAINTENANCE_DB_PATH", str(APP_DIR / "maintenance_master.db"))
+DB_PATH = str(APP_DIR / "maintenance_master.db")
 
 LOCATIONS_TABLE = "Locations_Master"
 ASSETS_TABLE = "Assets_Master"
@@ -37,6 +34,39 @@ def money(x) -> str:
         return f"${float(x):,.2f}"
     except Exception:
         return "$0.00"
+
+
+def get_db_status(db_path: str = DB_PATH) -> dict:
+    """Small diagnostic helper for Streamlit Cloud."""
+    p = Path(db_path)
+    status = {
+        "DB_PATH": str(p),
+        "exists": p.exists(),
+        "size_bytes": p.stat().st_size if p.exists() else 0,
+        "is_lfs_pointer": False,
+        "tables": [],
+        "error": "",
+    }
+
+    if p.exists() and p.stat().st_size < 500:
+        try:
+            txt = p.read_text(errors="ignore")
+            status["is_lfs_pointer"] = "git-lfs" in txt.lower() or "version https://git-lfs" in txt.lower()
+        except Exception:
+            pass
+
+    if p.exists() and not status["is_lfs_pointer"]:
+        try:
+            with sqlite3.connect(str(p)) as conn:
+                tables = pd.read_sql_query(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+                    conn,
+                )
+            status["tables"] = tables["name"].tolist()
+        except Exception as exc:
+            status["error"] = str(exc)
+
+    return status
 
 
 @st.cache_data(show_spinner=False)
@@ -61,6 +91,9 @@ def table_exists(db_path: str, table_name: str) -> bool:
 def load_table(db_path: str, table_name: str) -> pd.DataFrame:
     """Load a SQLite table from the shared maintenance database."""
     if not db_path or not os.path.exists(db_path):
+        return pd.DataFrame()
+
+    if not table_exists(db_path, table_name):
         return pd.DataFrame()
 
     with sqlite3.connect(db_path) as conn:
