@@ -6,9 +6,11 @@ from __future__ import annotations
 import streamlit as st
 
 from reporting_shared import DB_PATH, load_locations, load_assets, get_valid_locations
+from auth_helper import require_login
 
 
 st.set_page_config(page_title="Maintenance Reporting", layout="wide")
+require_login()
 
 st.title("Maintenance Reporting")
 st.caption("Starter reporting dashboard using maintenance_master.db")
