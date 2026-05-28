@@ -1,2 +1,14 @@
 streamlit
-
+pandas
+numpy
+matplotlib
+reportlab
+openpyxl
+XlsxWriter
+pyarrow
+python-docx
+streamlit-authenticator
+bcrypt
+PyMuPDF
+Pillow
+requests
