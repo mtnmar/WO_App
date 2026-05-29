@@ -7,9 +7,11 @@ import io
 import os
 import sqlite3
 from datetime import date, datetime
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from auth_helper import require_login
 
 try:
     from reportlab.lib import colors
@@ -23,15 +25,12 @@ except Exception:
 
 
 st.set_page_config(page_title="Location / Asset CMMS Report", layout="wide")
+require_login()
 
 # =========================
 # DATABASE CONFIG
 # =========================
-try:
-    from reporting_shared import DB_PATH
-except Exception:
-    from pathlib import Path
-    DB_PATH = str(Path(__file__).resolve().parents[1] / "maintenance_master.db")
+DB_PATH = str(Path(__file__).resolve().parents[1] / "maintenance_master.db")
 TABLE_NAME = "Asset_History_Merged"
 LOCATIONS_TABLE = "Locations_Master"
 ASSETS_TABLE = "Assets_Master"
@@ -495,13 +494,13 @@ def render_cmms_kpi_tab(audit_view: pd.DataFrame, issues_view: pd.DataFrame, rev
         {"KPI": "Completed No Start", "Flagged": completed_no_start_cnt, "Relevant Population": total_completed, "Total Work Orders": total_all, "% of Total WOs": round((completed_no_start_cnt / total_all) * 100, 1) if total_all else 0.0, "Definition": "Completed work orders missing a planned start date, except work completed within 3 days.", "Ramification": "Shows weak planning discipline and reduces the usefulness of scheduling KPIs."},
         {"KPI": "Completed No Due", "Flagged": completed_no_due_cnt, "Relevant Population": total_completed, "Total Work Orders": total_all, "% of Total WOs": round((completed_no_due_cnt / total_all) * 100, 1) if total_all else 0.0, "Definition": "Completed work orders missing a due date, except work completed within 3 days.", "Ramification": "Reduces the value of overdue tracking, prioritization, and schedule compliance."},
     ])
-    st.dataframe(helper_detail, use_container_width=True, hide_index=True)
+    st.dataframe(helper_detail, width="stretch", hide_index=True)
 
     rollup = helper_detail.copy()
     rollup["Target %"] = rollup["KPI"].map(HELPER_KPI_TARGETS).fillna(1.0)
     rollup["Status"] = rollup.apply(lambda r: "On Target" if float(r["% of Total WOs"]) <= float(r["Target %"]) else "Above Target", axis=1)
     st.markdown("### KPI Standards Rollup")
-    st.dataframe(rollup[["KPI", "Flagged", "Relevant Population", "Total Work Orders", "% of Total WOs", "Target %", "Status"]], use_container_width=True, hide_index=True)
+    st.dataframe(rollup[["KPI", "Flagged", "Relevant Population", "Total Work Orders", "% of Total WOs", "Target %", "Status"]], width="stretch", hide_index=True)
 
     st.markdown("### Reviewed Flag KPI Summary")
 
@@ -561,7 +560,7 @@ def render_cmms_kpi_tab(audit_view: pd.DataFrame, issues_view: pd.DataFrame, rev
             {"KPI": "Viewed No Error", "Count": viewed_no_error_cnt, "Definition": "Reviewed rows marked VIEWED_NO_ERROR."},
             {"KPI": "Viewed Error", "Count": viewed_with_error_cnt, "Definition": "Reviewed rows marked VIEWED_WITH_ERROR."},
         ])
-        st.dataframe(flag_summary_df, use_container_width=True, hide_index=True)
+        st.dataframe(flag_summary_df, width="stretch", hide_index=True)
 
     st.markdown("### Review Reason KPI Cards")
 
@@ -596,20 +595,20 @@ def render_cmms_kpi_tab(audit_view: pd.DataFrame, issues_view: pd.DataFrame, rev
 
     reason_df = pd.DataFrame(reason_rows)
     st.markdown("### Review Reason KPI Detail")
-    st.dataframe(reason_df, use_container_width=True, hide_index=True)
+    st.dataframe(reason_df, width="stretch", hide_index=True)
 
     if reviews_view.empty:
         st.info("No reviewed work-order flags match the current filters.")
     else:
         display_cols = [c for c in ["issue_key", "wo_id", "issue_type", "review_status", "reason_code", "review_note", "reviewed_by", "reviewed_ts"] if c in reviews_view.columns]
         st.markdown("### Reviewed Flag Detail")
-        st.dataframe(reviews_view[display_cols], use_container_width=True, hide_index=True)
+        st.dataframe(reviews_view[display_cols], width="stretch", hide_index=True)
         st.download_button(
             "Download CMMS KPI Review CSV",
             data=reviews_view[display_cols].to_csv(index=False).encode("utf-8-sig"),
             file_name=f"location_asset_cmms_kpi_review_{datetime.now():%Y%m%d_%H%M}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
 
     st.markdown("### Monthly Helper KPI Trend")
@@ -624,10 +623,10 @@ def render_cmms_kpi_tab(audit_view: pd.DataFrame, issues_view: pd.DataFrame, rev
             Completed_No_Start=("No_Start_Date_Flag", lambda s: int(pd.to_numeric(s, errors="coerce").fillna(0).sum())),
             Completed_No_Due=("No_Due_Date_Flag", lambda s: int(pd.to_numeric(s, errors="coerce").fillna(0).sum())),
         ).reset_index().sort_values("Created Month")
-        st.dataframe(monthly, use_container_width=True, hide_index=True)
+        st.dataframe(monthly, width="stretch", hide_index=True)
         chart_cols = [c for c in ["Presently_Overdue", "Backlog", "Completed_Overdue", "Completed_No_Start", "Completed_No_Due"] if c in monthly.columns]
         if chart_cols:
-            st.line_chart(monthly.set_index("Created Month")[chart_cols], use_container_width=True)
+            st.line_chart(monthly.set_index("Created Month")[chart_cols], width="stretch")
 
 # -----------------------------
 # Page
@@ -731,7 +730,7 @@ with report_tab:
             chart_df["Period"] = chart_df["Report Date"].dt.to_period("M").astype(str)
 
         trend = chart_df.groupby("Period", as_index=False)["Report Cost"].sum().sort_values("Period")
-        st.bar_chart(trend, x="Period", y="Report Cost", use_container_width=True)
+        st.bar_chart(trend, x="Period", y="Report Cost", width="stretch")
     else:
         st.info("No rows match the selected filters.")
 
@@ -740,7 +739,7 @@ with report_tab:
         st.subheader("Cost by DB Type")
         if "DB_TYPE" in fdf.columns and not fdf.empty:
             db_chart = fdf.groupby("DB_TYPE", as_index=False)["Report Cost"].sum().sort_values("Report Cost", ascending=False)
-            st.bar_chart(db_chart, x="DB_TYPE", y="Report Cost", use_container_width=True)
+            st.bar_chart(db_chart, x="DB_TYPE", y="Report Cost", width="stretch")
         else:
             st.info("No DB_TYPE data available.")
 
@@ -748,7 +747,7 @@ with report_tab:
         st.subheader("Top Assets by Cost")
         if not fdf.empty:
             top_assets = fdf.groupby("ASSET", as_index=False)["Report Cost"].sum().sort_values("Report Cost", ascending=False).head(15)
-            st.bar_chart(top_assets, x="ASSET", y="Report Cost", use_container_width=True)
+            st.bar_chart(top_assets, x="ASSET", y="Report Cost", width="stretch")
         else:
             st.info("No asset data available.")
 
@@ -764,7 +763,7 @@ with report_tab:
         display_cols = st.multiselect("Columns", list(fdf.columns), default=show_cols_default)
 
     view = fdf[display_cols].copy() if display_cols else fdf.copy()
-    st.dataframe(view, use_container_width=True, hide_index=True)
+    st.dataframe(view, width="stretch", hide_index=True)
 
     csv_bytes = view.to_csv(index=False).encode("utf-8-sig")
 
@@ -790,7 +789,7 @@ with report_tab:
             data=csv_bytes,
             file_name=f"location_asset_cmms_filtered_{datetime.now():%Y%m%d_%H%M}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
 
     with b2:
@@ -801,7 +800,7 @@ with report_tab:
                 data=pdf_bytes,
                 file_name=f"location_asset_cmms_report_{datetime.now():%Y%m%d_%H%M}.pdf",
                 mime="application/pdf",
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.warning("PDF export requires ReportLab. Install with: pip install reportlab")

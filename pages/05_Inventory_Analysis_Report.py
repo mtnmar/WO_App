@@ -9,10 +9,12 @@ import os
 import re
 import sqlite3
 from datetime import date, datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+from auth_helper import require_login
 
 try:
     from reportlab.lib import colors
@@ -26,19 +28,16 @@ except Exception:
 
 
 st.set_page_config(page_title="Inventory Analysis Report", layout="wide")
+require_login()
 
-try:
-    from reporting_shared import DB_PATH
-except Exception:
-    from pathlib import Path
-    DB_PATH = str(Path(__file__).resolve().parents[1] / "maintenance_master.db")
+DB_PATH = str(Path(__file__).resolve().parents[1] / "maintenance_master.db")
 PARTS_TABLE = "Parts_Master"
 RESTOCK_TABLE = "ReStock_Master"
 INVENTORY_TX_TABLE = "mx_inventory_transaction_detail_current"
 LOCATIONS_TABLE = "Locations_Master"
 
-PARTS_CSV_FALLBACK = ""
-INVENTORY_TX_CSV_FALLBACK = ""
+PARTS_CSV_FALLBACK = r"/mnt/data/Parts_Master(10).csv"
+INVENTORY_TX_CSV_FALLBACK = r"/mnt/data/mx_inventory_transaction_detail_current(1).csv"
 
 ALL = "All"
 
@@ -762,7 +761,7 @@ with kpi_tab:
     c6.metric("Created Inventory Cost", money(created_inventory_cost))
 
     st.caption(f"Window: {window_start:%Y-%m-%d} through {(window_end - pd.Timedelta(days=1)):%Y-%m-%d}")
-    st.dataframe(kpis.assign(Value=kpis["Value"].map(pct)), use_container_width=True, hide_index=True)
+    st.dataframe(kpis.assign(Value=kpis["Value"].map(pct)), width="stretch", hide_index=True)
 
     dl1, dl2 = st.columns(2)
     with dl1:
@@ -771,7 +770,7 @@ with kpi_tab:
             data=kpis.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"inventory_kpi_summary_{datetime.now():%Y%m%d_%H%M}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
     with dl2:
         if REPORTLAB_AVAILABLE:
@@ -786,7 +785,7 @@ with kpi_tab:
                     "Source": f"{PARTS_TABLE} + {INVENTORY_TX_TABLE}",
                 }
             )
-            st.download_button("Download KPI PDF", data=pdf, file_name=f"inventory_kpi_summary_{datetime.now():%Y%m%d_%H%M}.pdf", mime="application/pdf", use_container_width=True)
+            st.download_button("Download KPI PDF", data=pdf, file_name=f"inventory_kpi_summary_{datetime.now():%Y%m%d_%H%M}.pdf", mime="application/pdf", width="stretch")
 
 with analysis_tab:
     st.subheader("Monthly Inventory Analysis")
@@ -794,8 +793,8 @@ with analysis_tab:
     if monthly.empty:
         st.info("No monthly transaction rows match the selected filters.")
     else:
-        st.line_chart(monthly.set_index("Period")[["Ending Inventory Value"]], use_container_width=True)
-        st.bar_chart(monthly.set_index("Period")[["In $", "Out $", "Net Change $"]], use_container_width=True)
+        st.line_chart(monthly.set_index("Period")[["Ending Inventory Value"]], width="stretch")
+        st.bar_chart(monthly.set_index("Period")[["In $", "Out $", "Net Change $"]], width="stretch")
 
         display = monthly.copy()
         for c in ["Beginning Inventory Value", "In $", "Out $", "Net Change $", "Ending Inventory Value", "PO In $", "WO Out $", "Manual In $", "Manual Out $", "Non-Assigned Usage $"]:
@@ -803,7 +802,7 @@ with analysis_tab:
                 display[c] = display[c].map(money)
         if "%Δ Inventory vs Prior" in display.columns:
             display["%Δ Inventory vs Prior"] = display["%Δ Inventory vs Prior"].map(pct)
-        st.dataframe(display, use_container_width=True, hide_index=True)
+        st.dataframe(display, width="stretch", hide_index=True)
 
 with tx_tab:
     st.subheader("Transaction Review")
@@ -825,7 +824,7 @@ with tx_tab:
     loc_display = loc_summary.copy()
     if not loc_display.empty:
         loc_display["Cost"] = loc_display["Cost"].map(money)
-    st.dataframe(loc_display, use_container_width=True, hide_index=True)
+    st.dataframe(loc_display, width="stretch", hide_index=True)
 
     st.markdown("### Transaction Reasons")
     if reasons.empty:
@@ -836,7 +835,7 @@ with tx_tab:
         r["Abs_Amount"] = r["Abs_Amount"].map(money)
         r["% by Count"] = r["% by Count"].map(pct)
         r["% by Amount"] = r["% by Amount"].map(pct)
-        st.dataframe(r, use_container_width=True, hide_index=True)
+        st.dataframe(r, width="stretch", hide_index=True)
 
     created_inventory_window = tx_window.loc[created_inventory_mask].copy() if len(tx_window) else pd.DataFrame()
     if not created_inventory_window.empty:
@@ -847,7 +846,7 @@ with tx_tab:
             "Transaction Type", "Tx Type Clean", "Transaction Reason", "Transaction Reason Clean",
             "Work Order ID", "Purchase Order ID", "Transaction Initiator"
         ] if c in created_inventory_window.columns]
-        st.dataframe(created_inventory_window[created_cols] if created_cols else created_inventory_window, use_container_width=True, hide_index=True)
+        st.dataframe(created_inventory_window[created_cols] if created_cols else created_inventory_window, width="stretch", hide_index=True)
 
     if not non_assigned_window.empty:
         st.markdown("### Non-Assigned Part Usage")
@@ -857,7 +856,7 @@ with tx_tab:
             "Transaction Type", "Tx Type Clean", "Transaction Reason", "Transaction Reason Clean",
             "Work Order ID", "Purchase Order ID", "Transaction Initiator"
         ] if c in non_assigned_window.columns]
-        st.dataframe(non_assigned_window[cols] if cols else non_assigned_window, use_container_width=True, hide_index=True)
+        st.dataframe(non_assigned_window[cols] if cols else non_assigned_window, width="stretch", hide_index=True)
 
 with audit_tab:
     st.subheader("Inventory Audit - Inventory Error Review")
@@ -888,16 +887,16 @@ with audit_tab:
             rs_display = rs.copy()
             rs_display["Total_Cost"] = rs_display["Total_Cost"].map(money)
             st.markdown("### Error Reason Summary")
-            st.dataframe(rs_display, use_container_width=True, hide_index=True)
+            st.dataframe(rs_display, width="stretch", hide_index=True)
 
         st.markdown("### Inventory Error Detail")
-        st.dataframe(error_view, use_container_width=True, hide_index=True)
+        st.dataframe(error_view, width="stretch", hide_index=True)
         st.download_button(
             "Download Inventory Error Detail CSV",
             data=error_view.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"inventory_error_detail_{datetime.now():%Y%m%d_%H%M}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
 
 
@@ -906,14 +905,14 @@ with detail_tab:
     d1, d2 = st.tabs(["Parts_Master", "mx_inventory_transaction_detail_current"])
     with d1:
         cols = [c for c in ["ID", "Name", "Location", "__Parent Location", "Types", "Quantity in Stock", "Minimum Quantity", "Unit Cost", "Total Cost", "Vendors"] if c in parts_view.columns]
-        st.dataframe(parts_view[cols] if cols else parts_view, use_container_width=True, hide_index=True)
+        st.dataframe(parts_view[cols] if cols else parts_view, width="stretch", hide_index=True)
     with d2:
         default_cols = [c for c in [
             "Transaction ID", "Tx Date", "Transaction Date", "Direction Clean", "Direction",
             "Part ID", "Part Name", "Parent Location", "Part Location", "Total Cost Num", "Total Cost",
             "Tx Type Clean", "Transaction Type", "Transaction Reason Clean", "Transaction Reason", "WO ID Key", "Work Order ID", "PO ID Key", "Purchase Order ID"
         ] if c in tx_window.columns]
-        st.dataframe(tx_window[default_cols] if default_cols else tx_window, use_container_width=True, hide_index=True)
+        st.dataframe(tx_window[default_cols] if default_cols else tx_window, width="stretch", hide_index=True)
 
     st.download_button(
         "Download Inventory Analysis XLSX",
@@ -929,5 +928,5 @@ with detail_tab:
         }),
         file_name=f"inventory_analysis_report_{datetime.now():%Y%m%d_%H%M}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
+        width="stretch",
     )

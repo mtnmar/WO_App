@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from auth_helper import require_login
 
 try:
     from reportlab.lib import colors
@@ -25,11 +26,7 @@ try:
 except Exception:
     REPORTLAB_AVAILABLE = False
 
-try:
-    from reporting_shared import DB_PATH
-except Exception:
-    from pathlib import Path
-    DB_PATH = str(Path(__file__).resolve().parents[1] / "maintenance_master.db")
+DB_PATH = str(Path(__file__).resolve().parents[1] / "maintenance_master.db")
 LOGO_PATH = Path(DB_PATH).parent / "greer_logo.png"
 
 RESTOCK_TABLE = "ReStock_Master"
@@ -44,6 +41,7 @@ ORDERING_REFERENCE_COLUMN_TEMPLATE = ['Name', 'Part Numbers', 'InStk', 'MinStk',
 
 
 st.set_page_config(page_title="Inventory Re-Stock Report", layout="wide")
+require_login()
 st.markdown(
     """
     <style>
@@ -753,7 +751,7 @@ for k, v in {
 # -----------------------------
 ctrl1, ctrl2 = st.columns([1.2, 4.8])
 with ctrl1:
-    if st.button("🆕 Clear / New Cart + Req/RFQ", key="rsr_clear_new_flow", use_container_width=True):
+    if st.button("🆕 Clear / New Cart + Req/RFQ", key="rsr_clear_new_flow", width="stretch"):
         clear_restock_report_flow()
         st.success("Started a new cart and Req/RFQ flow.")
         st.rerun()
@@ -842,13 +840,13 @@ with tab_restock:
         data=sorted_view[csv_cols].to_csv(index=False).encode("utf-8-sig"),
         file_name=f"restock_filtered_display_{dt.datetime.now():%Y%m%d_%H%M}.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
         key="rsr_display_csv",
     )
 
     edited = st.data_editor(
         sorted_view,
-        use_container_width=True,
+        width="stretch",
         height=500,
         key="rsr_table_editor",
         hide_index=True,
@@ -865,9 +863,9 @@ with tab_restock:
 
     b1, b2, b3 = st.columns([1.4, 1.1, 3.5])
     with b1:
-        add_clicked = st.button("Add Selected to Cart", key="rsr_add_cart", use_container_width=True)
+        add_clicked = st.button("Add Selected to Cart", key="rsr_add_cart", width="stretch")
     with b2:
-        clear_clicked = st.button("Clear Cart", key="rsr_clear_cart", use_container_width=True)
+        clear_clicked = st.button("Clear Cart", key="rsr_clear_cart", width="stretch")
 
     if clear_clicked:
         st.session_state["restock_report_cart"] = empty_cart_df()
@@ -914,7 +912,7 @@ with tab_restock:
 
         edited_cart = st.data_editor(
             cart_df,
-            use_container_width=True,
+            width="stretch",
             height=260,
             key="rsr_cart_editor",
             hide_index=True,
@@ -937,9 +935,9 @@ with tab_restock:
 
         c1, c2 = st.columns(2)
         with c1:
-            st.download_button("Download Cart CSV", data=cart_export_df.to_csv(index=False).encode("utf-8-sig"), file_name=f"restock_cart_{dt.datetime.now():%Y%m%d_%H%M}.csv", mime="text/csv", use_container_width=True)
+            st.download_button("Download Cart CSV", data=cart_export_df.to_csv(index=False).encode("utf-8-sig"), file_name=f"restock_cart_{dt.datetime.now():%Y%m%d_%H%M}.csv", mime="text/csv", width="stretch")
         with c2:
-            st.download_button("Download Cart XLSX", data=xlsx_bytes({"Cart": cart_export_df}), file_name=f"restock_cart_{dt.datetime.now():%Y%m%d_%H%M}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            st.download_button("Download Cart XLSX", data=xlsx_bytes({"Cart": cart_export_df}), file_name=f"restock_cart_{dt.datetime.now():%Y%m%d_%H%M}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch")
 
 with tab_req:
     st.subheader("Req / RFQ")
@@ -986,7 +984,9 @@ with tab_req:
     with h8:
         st.text_input("Contact Phone", value=contact_phone, disabled=True)
     with h9:
-        st.selectbox("Priority", ["Low", "Medium", "High", "Urgent"], index=["Low", "Medium", "High", "Urgent"].index(st.session_state.get("restock_report_priority", "Medium")) if st.session_state.get("restock_report_priority", "Medium") in ["Low", "Medium", "High", "Urgent"] else 1, key="restock_report_priority")
+        if "restock_report_priority" not in st.session_state:
+            st.session_state["restock_report_priority"] = "Medium"
+        st.selectbox("Priority", ["Low", "Medium", "High", "Urgent"], key="restock_report_priority")
 
     ship_to = get_ship_to(selected_parent if selected_parent != ALL else "", addresses)
     vendor_ship_to = get_vendor_ship_to(selected_parent if selected_parent != ALL else "", addresses)
@@ -1002,7 +1002,7 @@ with tab_req:
     if not cart.empty:
         req_lines = st.data_editor(
             cart.copy(),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             key="rsr_req_lines_editor",
             column_config={
@@ -1035,12 +1035,12 @@ with tab_req:
     req_header = requisition_header_export({**header_common, "doc_no": req_no})
     r1, r2, r3 = st.columns(3)
     with r1:
-        st.download_button("Download Requisition CSV", data=pd.DataFrame([req_header]).to_csv(index=False).encode("utf-8-sig"), file_name=f"{req_no}_header.csv", mime="text/csv", use_container_width=True)
+        st.download_button("Download Requisition CSV", data=pd.DataFrame([req_header]).to_csv(index=False).encode("utf-8-sig"), file_name=f"{req_no}_header.csv", mime="text/csv", width="stretch")
     with r2:
-        st.download_button("Download Requisition Lines CSV", data=build_export_lines(cart).to_csv(index=False).encode("utf-8-sig"), file_name=f"{req_no}_lines.csv", mime="text/csv", use_container_width=True)
+        st.download_button("Download Requisition Lines CSV", data=build_export_lines(cart).to_csv(index=False).encode("utf-8-sig"), file_name=f"{req_no}_lines.csv", mime="text/csv", width="stretch")
     with r3:
         if REPORTLAB_AVAILABLE:
-            st.download_button("Download Requisition PDF", data=requisition_pdf_bytes(req_header, cart), file_name=f"{req_no}.pdf", mime="application/pdf", use_container_width=True)
+            st.download_button("Download Requisition PDF", data=requisition_pdf_bytes(req_header, cart), file_name=f"{req_no}.pdf", mime="application/pdf", width="stretch")
         else:
             st.warning("ReportLab not available for PDF export.")
 
@@ -1049,12 +1049,12 @@ with tab_req:
     rfq_header = rfq_header_export(header_common)
     q1, q2, q3 = st.columns(3)
     with q1:
-        st.download_button("Download RFQ CSV", data=pd.DataFrame([rfq_header]).to_csv(index=False).encode("utf-8-sig"), file_name=f"{rfq_no}_header.csv", mime="text/csv", use_container_width=True)
+        st.download_button("Download RFQ CSV", data=pd.DataFrame([rfq_header]).to_csv(index=False).encode("utf-8-sig"), file_name=f"{rfq_no}_header.csv", mime="text/csv", width="stretch")
     with q2:
-        st.download_button("Download RFQ Lines CSV", data=build_export_lines(cart).to_csv(index=False).encode("utf-8-sig"), file_name=f"{rfq_no}_lines.csv", mime="text/csv", use_container_width=True)
+        st.download_button("Download RFQ Lines CSV", data=build_export_lines(cart).to_csv(index=False).encode("utf-8-sig"), file_name=f"{rfq_no}_lines.csv", mime="text/csv", width="stretch")
     with q3:
         if REPORTLAB_AVAILABLE:
-            st.download_button("Download RFQ PDF", data=rfq_pdf_bytes(rfq_no, cart, rfq_header), file_name=f"{rfq_no}.pdf", mime="application/pdf", use_container_width=True)
+            st.download_button("Download RFQ PDF", data=rfq_pdf_bytes(rfq_no, cart, rfq_header), file_name=f"{rfq_no}.pdf", mime="application/pdf", width="stretch")
         else:
             st.warning("ReportLab not available for PDF export.")
 
@@ -1114,10 +1114,10 @@ with tab_crit:
             data=crit_selected_fmt.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"parts_criticality_index_{dt.datetime.now():%Y%m%d_%H%M}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
             key="rsr_crit_csv",
         )
-        st.dataframe(crit_selected_fmt, use_container_width=True, hide_index=True, height=650)
+        st.dataframe(crit_selected_fmt, width="stretch", hide_index=True, height=650)
 
 with tab_order_ref:
     st.subheader("Ordering Reference: Re-Stock + Parts Criticality")
@@ -1154,7 +1154,7 @@ with tab_order_ref:
             data=ordering_selected_fmt.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"restock_ordering_reference_{dt.datetime.now():%Y%m%d_%H%M}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
             key="rsr_order_ref_csv",
         )
-        st.dataframe(ordering_selected_fmt, use_container_width=True, hide_index=True, height=650)
+        st.dataframe(ordering_selected_fmt, width="stretch", hide_index=True, height=650)

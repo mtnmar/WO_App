@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from auth_helper import require_login
 
 try:
     from reportlab.lib import colors
@@ -66,6 +67,7 @@ except Exception:
         return sorted(values[values.ne("")].unique().tolist())
 
 st.set_page_config(page_title="Purchase Order Report", layout="wide")
+require_login()
 
 
 DATE_CANDIDATES = ["Posting Date", "Completed On", "Approved On", "Created On", "Due Date"]
@@ -711,21 +713,21 @@ def render_kpi_review_tab(detail: pd.DataFrame, availability: dict):
         summary_display = summary.copy()
         summary_display["Received Cost"] = summary_display["Received Cost"].map(money)
         st.markdown("### Review Reason Summary")
-        st.dataframe(summary_display, use_container_width=True, hide_index=True)
+        st.dataframe(summary_display, width="stretch", hide_index=True)
 
         chart_df = summary.head(15).copy()
         st.markdown("### Reviewed With Error by Reason")
-        st.bar_chart(chart_df, x="KPI Reason", y="Reviewed - With Error", use_container_width=True)
+        st.bar_chart(chart_df, x="KPI Reason", y="Reviewed - With Error", width="stretch")
 
     st.markdown("### Reviewed KPI Detail")
     view = format_detail_for_display(review_detail)
-    st.dataframe(view, use_container_width=True, hide_index=True)
+    st.dataframe(view, width="stretch", hide_index=True)
     st.download_button(
         "Download KPI Review Detail CSV",
         data=view.to_csv(index=False).encode("utf-8-sig"),
         file_name=f"purchase_order_kpi_review_detail_{datetime.now():%Y%m%d_%H%M}.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -795,43 +797,43 @@ def render_kpi_otr_tab(detail: pd.DataFrame, availability: dict):
         summary_display = summary.copy()
         summary_display["Received Cost"] = summary_display["Received Cost"].map(money)
         st.markdown("### OTR Reason Summary")
-        st.dataframe(summary_display, use_container_width=True, hide_index=True)
+        st.dataframe(summary_display, width="stretch", hide_index=True)
 
     c1, c2 = st.columns(2)
     with c1:
         if "Vendor" in otr_detail.columns:
             vendor_chart = otr_detail.groupby("Vendor", as_index=False)["Received Cost"].sum().sort_values("Received Cost", ascending=False).head(15)
             st.markdown("### OTR by Vendor")
-            st.bar_chart(vendor_chart, x="Vendor", y="Received Cost", use_container_width=True)
+            st.bar_chart(vendor_chart, x="Vendor", y="Received Cost", width="stretch")
     with c2:
         if "Location" in otr_detail.columns:
             loc_chart = otr_detail.groupby("Location", as_index=False)["Received Cost"].sum().sort_values("Received Cost", ascending=False).head(15)
             st.markdown("### OTR by Location")
-            st.bar_chart(loc_chart, x="Location", y="Received Cost", use_container_width=True)
+            st.bar_chart(loc_chart, x="Location", y="Received Cost", width="stretch")
 
     st.markdown("### OTR Missing Maintenance Work Order")
     if not otr_missing_mwo.empty:
         missing_view = format_detail_for_display(otr_missing_mwo)
-        st.dataframe(missing_view, use_container_width=True, hide_index=True)
+        st.dataframe(missing_view, width="stretch", hide_index=True)
         st.download_button(
             "Download OTR Missing MWO CSV",
             data=missing_view.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"purchase_order_otr_missing_mwo_{datetime.now():%Y%m%d_%H%M}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
     else:
         st.info("No reviewed OTR purchase orders are missing a Maintenance Work Order for the current filters.")
 
     st.markdown("### Reviewed OTR Detail")
     view = format_detail_for_display(otr_detail)
-    st.dataframe(view, use_container_width=True, hide_index=True)
+    st.dataframe(view, width="stretch", hide_index=True)
     st.download_button(
         "Download OTR Detail CSV",
         data=view.to_csv(index=False).encode("utf-8-sig"),
         file_name=f"purchase_order_otr_detail_{datetime.now():%Y%m%d_%H%M}.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -995,14 +997,14 @@ def render_outstanding_po_tab(po_df: pd.DataFrame, selected_locations: list[str]
         )
 
     display = filtered[display_cols].copy() if display_cols else filtered.drop(columns=["Created On Sort"], errors="ignore").copy()
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    st.dataframe(display, width="stretch", hide_index=True)
 
     st.download_button(
         f"Download Outstanding POs CSV - sorted by {sort_mode}",
         data=display.to_csv(index=False).encode("utf-8-sig"),
         file_name=f"outstanding_pos_{sort_mode.lower().replace(' ', '_').replace('#', 'number')}_{datetime.now():%Y%m%d_%H%M}.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -1170,7 +1172,7 @@ with report_tab:
             chart_df["Period"] = chart_df["Report Date"].dt.to_period("M").astype(str)
     
         trend = chart_df.groupby("Period", as_index=False)["Report Cost"].sum().sort_values("Period")
-        st.bar_chart(trend, x="Period", y="Report Cost", use_container_width=True)
+        st.bar_chart(trend, x="Period", y="Report Cost", width="stretch")
     else:
         st.info("No rows match the selected filters.")
     
@@ -1180,7 +1182,7 @@ with report_tab:
         st.subheader("Cost by PO Category")
         if not fdf.empty:
             cat_chart = fdf.groupby("PO Cost Category", as_index=False)["Report Cost"].sum().sort_values("Report Cost", ascending=False)
-            st.bar_chart(cat_chart, x="PO Cost Category", y="Report Cost", use_container_width=True)
+            st.bar_chart(cat_chart, x="PO Cost Category", y="Report Cost", width="stretch")
         else:
             st.info("No category data available.")
     
@@ -1188,7 +1190,7 @@ with report_tab:
         st.subheader("Top Vendors by Cost")
         if "Vendor" in fdf.columns and not fdf.empty:
             vendor_chart = fdf.groupby("Vendor", as_index=False)["Report Cost"].sum().sort_values("Report Cost", ascending=False).head(15)
-            st.bar_chart(vendor_chart, x="Vendor", y="Report Cost", use_container_width=True)
+            st.bar_chart(vendor_chart, x="Vendor", y="Report Cost", width="stretch")
         else:
             st.info("No vendor data available.")
     
@@ -1198,7 +1200,7 @@ with report_tab:
         st.subheader("Cost by Location")
         if not fdf.empty:
             loc_chart = fdf.groupby("Report Location", as_index=False)["Report Cost"].sum().sort_values("Report Cost", ascending=False).head(20)
-            st.bar_chart(loc_chart, x="Report Location", y="Report Cost", use_container_width=True)
+            st.bar_chart(loc_chart, x="Report Location", y="Report Cost", width="stretch")
         else:
             st.info("No location data available.")
     
@@ -1206,7 +1208,7 @@ with report_tab:
         st.subheader("Top Types by Cost")
         if not fdf.empty:
             item_chart = fdf.groupby("Report Type", as_index=False)["Report Cost"].sum().sort_values("Report Cost", ascending=False).head(20)
-            st.bar_chart(item_chart, x="Report Type", y="Report Cost", use_container_width=True)
+            st.bar_chart(item_chart, x="Report Type", y="Report Cost", width="stretch")
         else:
             st.info("No Type data available.")
     
@@ -1249,7 +1251,7 @@ with report_tab:
         display_cols = st.multiselect("Columns", list(fdf.columns), default=show_cols_default)
     
     view = fdf[display_cols].copy() if display_cols else fdf.copy()
-    st.dataframe(view, use_container_width=True, hide_index=True)
+    st.dataframe(view, width="stretch", hide_index=True)
     
     csv_bytes = view.to_csv(index=False).encode("utf-8-sig")
     
@@ -1282,7 +1284,7 @@ with report_tab:
             data=csv_bytes,
             file_name=f"purchase_orders_filtered_{datetime.now():%Y%m%d_%H%M}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
     
     with b2:
@@ -1293,7 +1295,7 @@ with report_tab:
                 data=pdf_bytes,
                 file_name=f"purchase_order_report_{datetime.now():%Y%m%d_%H%M}.pdf",
                 mime="application/pdf",
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.warning("PDF export requires ReportLab. Install with: pip install reportlab")

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from auth_helper import require_login
 
 try:
     import matplotlib.pyplot as plt
@@ -70,6 +71,7 @@ except Exception:
 
 
 st.set_page_config(page_title="Mobile Service Report", layout="wide")
+require_login()
 
 REPORT_HISTORY_TABLE = "Mobile_Service_Report_History"
 REPORT_TABLE = "Mobile_Service_Report"
@@ -253,7 +255,7 @@ def export_buttons(df: pd.DataFrame, base_name: str, key_prefix: str) -> None:
             data=export_df.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"{base_name}_{datetime.now():%Y%m%d_%H%M}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
             key=f"{key_prefix}_csv",
         )
     with c2:
@@ -266,7 +268,7 @@ def export_buttons(df: pd.DataFrame, base_name: str, key_prefix: str) -> None:
                 data=buffer.getvalue(),
                 file_name=f"{base_name}_{datetime.now():%Y%m%d_%H%M}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+                width="stretch",
                 key=f"{key_prefix}_xlsx",
             )
         except Exception:
@@ -461,7 +463,7 @@ def render_kpi_page(df_view: pd.DataFrame) -> None:
     st.markdown("### KPI Summary Table")
     display_summary = kpi_summary.copy()
     display_summary["Value"] = display_summary["Value"].map(lambda x: format_num(x, 1) if isinstance(x, float) and pd.notna(x) else x)
-    st.dataframe(display_summary, use_container_width=True, hide_index=True)
+    st.dataframe(display_summary, width="stretch", hide_index=True)
 
     if MATPLOTLIB_AVAILABLE:
         pdf_data = export_kpi_pdf(display_summary, title="Mobile Service KPI Summary")
@@ -470,14 +472,14 @@ def render_kpi_page(df_view: pd.DataFrame) -> None:
             data=pdf_data,
             file_name=f"Mobile_Service_KPI_Summary_{datetime.now():%Y%m%d_%H%M}.pdf",
             mime="application/pdf",
-            use_container_width=True,
+            width="stretch",
             key="kpi_pdf",
         )
 
     st.markdown("### KPI Detail")
     detail_cols = kpi_detail_columns(df_view)
     detail = df_view[detail_cols].copy() if detail_cols else df_view.copy()
-    st.dataframe(format_for_display_export(detail), use_container_width=True, hide_index=True)
+    st.dataframe(format_for_display_export(detail), width="stretch", hide_index=True)
     export_buttons(detail, "Mobile_Service_KPI_Detail", "kpi_detail")
 
 
@@ -492,7 +494,7 @@ def render_status_page(df_view: pd.DataFrame, status: str, title: str, file_name
         return
     cols = due_detail_columns(work)
     view = work[cols].copy() if cols else work.copy()
-    st.dataframe(format_for_display_export(view), use_container_width=True, hide_index=True)
+    st.dataframe(format_for_display_export(view), width="stretch", hide_index=True)
     export_buttons(view, file_name, file_name.lower())
 
 
@@ -510,7 +512,7 @@ def render_service_audit_page(df_view: pd.DataFrame) -> None:
         "Open WO Status", "KPI Status", "Service Audit",
     ] if c in work.columns]
     view = work[cols].copy() if cols else work.copy()
-    st.dataframe(format_for_display_export(view), use_container_width=True, hide_index=True)
+    st.dataframe(format_for_display_export(view), width="stretch", hide_index=True)
     export_buttons(view, "Mobile_Service_Audit", "service_audit")
 
 
@@ -526,7 +528,7 @@ def render_open_wo_page(df_view: pd.DataFrame) -> None:
         "Current Date", "Remaining Hours", "Remaining Days", "Predicted Service Date", "Expected Completion Hours",
     ] if c in work.columns]
     view = work[cols].copy() if cols else work.copy()
-    st.dataframe(format_for_display_export(view), use_container_width=True, hide_index=True)
+    st.dataframe(format_for_display_export(view), width="stretch", hide_index=True)
     export_buttons(view, "Mobile_Service_Open_WorkOrders", "open_wo")
 
 
@@ -544,7 +546,7 @@ def render_main_report(df_view: pd.DataFrame) -> None:
     with st.expander("Column Display", expanded=False):
         cols = st.multiselect("Columns", list(df_view.columns), default=cols_default, key="main_cols")
     view = df_view[cols].copy() if cols else df_view.copy()
-    st.dataframe(format_for_display_export(view), use_container_width=True, hide_index=True)
+    st.dataframe(format_for_display_export(view), width="stretch", hide_index=True)
     export_buttons(view, "Mobile_Service_Main_Report", "main_report")
 
 
@@ -554,7 +556,7 @@ def render_history_page(hist_filtered: pd.DataFrame) -> None:
         st.info("No history rows match the current filters.")
         return
     view = hist_filtered.drop(columns=["__source_table", "__run_ts", "__run_date"], errors="ignore").copy()
-    st.dataframe(format_for_display_export(view), use_container_width=True, hide_index=True)
+    st.dataframe(format_for_display_export(view), width="stretch", hide_index=True)
     export_buttons(view, "Mobile_Service_Report_History", "history")
 
 

@@ -148,3 +148,29 @@ def get_asset_options(assets_df: pd.DataFrame, selected_locations: Iterable[str]
     values = df[asset_col].dropna().astype(str).map(str.strip)
     values = values[values.ne("")]
     return sorted(values.unique().tolist())
+
+
+
+def get_db_status(db_path: str = DB_PATH) -> dict:
+    """Return simple diagnostics for the SQLite database used by Streamlit Cloud."""
+    status = {
+        "db_path": db_path,
+        "exists": bool(db_path and os.path.exists(db_path)),
+        "size_mb": 0.0,
+        "tables": [],
+        "table_count": 0,
+        "error": "",
+    }
+    try:
+        if status["exists"]:
+            status["size_mb"] = round(os.path.getsize(db_path) / (1024 * 1024), 2)
+            with sqlite3.connect(db_path) as conn:
+                rows = pd.read_sql_query(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+                    conn,
+                )
+            status["tables"] = rows["name"].astype(str).tolist() if not rows.empty else []
+            status["table_count"] = len(status["tables"])
+    except Exception as exc:
+        status["error"] = str(exc)
+    return status

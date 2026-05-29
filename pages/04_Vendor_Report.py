@@ -11,6 +11,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import streamlit as st
+from auth_helper import require_login
 
 try:
     from reportlab.lib import colors
@@ -24,6 +25,7 @@ except Exception:
 
 
 st.set_page_config(page_title="Vendor Report", layout="wide")
+require_login()
 
 # =========================
 # DATABASE CONFIG
@@ -475,19 +477,19 @@ with summary_tab:
     st.markdown("### Completeness Summary")
     if "Completeness Status" in fdf.columns and not fdf.empty:
         comp_summary = fdf.groupby("Completeness Status", as_index=False).agg(Vendors=("Vendor", "count")).sort_values("Vendors", ascending=False)
-        st.dataframe(comp_summary, use_container_width=True, hide_index=True)
-        st.bar_chart(comp_summary, x="Completeness Status", y="Vendors", use_container_width=True)
+        st.dataframe(comp_summary, width="stretch", hide_index=True)
+        st.bar_chart(comp_summary, x="Completeness Status", y="Vendors", width="stretch")
 
     st.markdown("### Lead Time Risk Summary")
     if "Lead Time Risk Band" in fdf.columns and not fdf.empty:
         risk_summary = fdf.groupby("Lead Time Risk Band", as_index=False).agg(Vendors=("Vendor", "count")).sort_values("Vendors", ascending=False)
-        st.dataframe(risk_summary, use_container_width=True, hide_index=True)
-        st.bar_chart(risk_summary, x="Lead Time Risk Band", y="Vendors", use_container_width=True)
+        st.dataframe(risk_summary, width="stretch", hide_index=True)
+        st.bar_chart(risk_summary, x="Lead Time Risk Band", y="Vendors", width="stretch")
 
     st.markdown("### Contact Completeness Issues")
     issue_cols = [c for c in ["Vendor", "Completeness Status", "Completeness Issues", "Contacts", "Emails", "Phones"] if c in fdf.columns]
     contact_issues = fdf[fdf.get("Completeness Status", pd.Series(index=fdf.index)).astype(str).isin(["Incomplete", "Review"])].copy()
-    st.dataframe(contact_issues[issue_cols], use_container_width=True, hide_index=True)
+    st.dataframe(contact_issues[issue_cols], width="stretch", hide_index=True)
 
 with lead_tab:
     st.subheader("Lead Time Review")
@@ -501,7 +503,7 @@ with lead_tab:
     for c in ["Avg Lead Time Days", "Median Lead Time Days", "Max Lead Time Days"]:
         if c in lead_view.columns:
             lead_view[c] = pd.to_numeric(lead_view[c], errors="coerce").round(1)
-    st.dataframe(lead_view, use_container_width=True, hide_index=True)
+    st.dataframe(lead_view, width="stretch", hide_index=True)
 
     c1, c2 = st.columns(2)
     with c1:
@@ -510,14 +512,14 @@ with lead_tab:
             top_lt["Avg Lead Time Days"] = pd.to_numeric(top_lt["Avg Lead Time Days"], errors="coerce")
             top_lt = top_lt.dropna(subset=["Avg Lead Time Days"]).sort_values("Avg Lead Time Days", ascending=False).head(15)
             st.markdown("### Highest Avg Lead Time")
-            st.bar_chart(top_lt, x="Vendor", y="Avg Lead Time Days", use_container_width=True)
+            st.bar_chart(top_lt, x="Vendor", y="Avg Lead Time Days", width="stretch")
     with c2:
         if not fdf.empty and "Vendor" in fdf.columns and "Total Received Cost" in fdf.columns:
             top_cost = fdf.copy()
             top_cost["Total Received Cost"] = pd.to_numeric(top_cost["Total Received Cost"], errors="coerce").fillna(0)
             top_cost = top_cost.sort_values("Total Received Cost", ascending=False).head(15)
             st.markdown("### Highest Received Cost")
-            st.bar_chart(top_cost, x="Vendor", y="Total Received Cost", use_container_width=True)
+            st.bar_chart(top_cost, x="Vendor", y="Total Received Cost", width="stretch")
 
 with detail_tab:
     st.subheader("Vendor Detail")
@@ -533,7 +535,7 @@ with detail_tab:
         display_cols = st.multiselect("Columns", list(fdf.columns), default=default_cols)
 
     view = fdf[display_cols].copy() if display_cols else fdf.copy()
-    st.dataframe(view, use_container_width=True, hide_index=True)
+    st.dataframe(view, width="stretch", hide_index=True)
 
     filters_for_pdf = {
         "Vendor": ", ".join(selected_vendors) if selected_vendors else "All",
@@ -558,7 +560,7 @@ with detail_tab:
             data=view.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"vendor_report_{datetime.now():%Y%m%d_%H%M}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
     with b2:
         st.download_button(
@@ -566,7 +568,7 @@ with detail_tab:
             data=to_xlsx_bytes(view),
             file_name=f"vendor_report_{datetime.now():%Y%m%d_%H%M}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width="stretch",
         )
     with b3:
         if REPORTLAB_AVAILABLE:
@@ -575,7 +577,7 @@ with detail_tab:
                 data=build_pdf(view, filters_for_pdf, summary_for_pdf),
                 file_name=f"vendor_report_{datetime.now():%Y%m%d_%H%M}.pdf",
                 mime="application/pdf",
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.warning("PDF export requires ReportLab. Install with: pip install reportlab")

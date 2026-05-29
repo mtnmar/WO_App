@@ -1,4 +1,3 @@
-# pages/99_DB_Diagnostics.py
 from __future__ import annotations
 
 import sqlite3
@@ -6,63 +5,44 @@ import sqlite3
 import pandas as pd
 import streamlit as st
 
+from auth_helper import require_login
 from reporting_shared import DB_PATH, get_db_status
 
 st.set_page_config(page_title="DB Diagnostics", layout="wide")
-st.title("Database Diagnostics")
+require_login()
 
+st.title("Database Diagnostics")
 status = get_db_status(DB_PATH)
 
-st.subheader("Database Path")
-st.code(status["DB_PATH"], language="text")
+st.write("Database path:")
+st.code(status.get("db_path", ""), language="text")
 
 c1, c2, c3 = st.columns(3)
-c1.metric("DB Exists", "Yes" if status["exists"] else "No")
-c2.metric("DB Size", f"{status['size_bytes']:,} bytes")
-c3.metric("Git LFS Pointer", "Yes" if status["is_lfs_pointer"] else "No")
+c1.metric("DB Exists", "Yes" if status.get("exists") else "No")
+c2.metric("DB Size MB", status.get("size_mb", 0))
+c3.metric("Table Count", status.get("table_count", 0))
 
-if status["error"]:
+if status.get("error"):
     st.error(status["error"])
 
-if not status["exists"]:
-    st.warning("maintenance_master.db was not found in the repo root.")
+tables = status.get("tables", []) or []
+if not tables:
+    st.warning("No SQLite tables were found.")
     st.stop()
 
-if status["is_lfs_pointer"]:
-    st.error("The DB file appears to be a Git LFS pointer, not the real SQLite database.")
-    st.stop()
+st.subheader("Tables")
+st.dataframe(pd.DataFrame({"Table": tables}), width="stretch", hide_index=True)
 
-tables = status["tables"]
-st.subheader("Tables Found")
-st.write(f"{len(tables):,} tables found.")
-
-required = [
-    "Locations_Master",
-    "Assets_Master",
-    "Asset_History_Merged",
-    "Purchase_Orders",
-    "Mobile_Service_Report_History",
-    "Mobile_Service_Report",
-    "Vendors_Master",
-    "mx_vendor_audit_current",
-    "mx_vendor_audit_manual",
-]
-
-with sqlite3.connect(DB_PATH) as conn:
-    rows = []
-    for t in required:
-        exists = t in tables
-        count = None
-        if exists:
+st.subheader("Row Counts")
+rows = []
+try:
+    with sqlite3.connect(DB_PATH) as conn:
+        for table in tables:
             try:
-                count = pd.read_sql_query(f'SELECT COUNT(*) AS n FROM "{t}"', conn)["n"].iloc[0]
-            except Exception:
-                count = "error"
-        rows.append({"Expected Table": t, "Exists": exists, "Rows": count})
-    req_df = pd.DataFrame(rows)
-
-st.subheader("Expected Reporting Tables")
-st.dataframe(req_df, use_container_width=True, hide_index=True)
-
-st.subheader("All Tables")
-st.dataframe(pd.DataFrame({"Table": tables}), use_container_width=True, hide_index=True)
+                count = pd.read_sql_query(f'SELECT COUNT(*) AS row_count FROM "{table}"', conn)["row_count"].iloc[0]
+            except Exception as exc:
+                count = f"Error: {exc}"
+            rows.append({"Table": table, "Rows": count})
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+except Exception as exc:
+    st.error(f"Could not read row counts: {exc}")
