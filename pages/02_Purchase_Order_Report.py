@@ -116,6 +116,12 @@ def prepare_po_df(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     else:
         df["Report Date"] = pd.NaT
 
+    completed_col = first_present(df, ["Completed On", "Completed Date", "Completion Date"])
+    if completed_col:
+        df["Completed On Filter Date"] = pd.to_datetime(df[completed_col], errors="coerce").dt.tz_localize(None)
+    else:
+        df["Completed On Filter Date"] = pd.NaT
+
     if cost_col:
         df["Report Cost"] = pd.to_numeric(df[cost_col], errors="coerce").fillna(0.0)
     else:
@@ -152,6 +158,7 @@ def prepare_po_df(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
     meta = {
         "date_col": date_col,
+        "completed_col": completed_col,
         "cost_col": cost_col,
         "location_col": loc_col,
         "wo_col": wo_col,
@@ -193,10 +200,16 @@ def apply_filters(
     selected_types: list[str],
     start_dt: pd.Timestamp,
     end_dt: pd.Timestamp,
+    only_completed_in_range: bool = False,
 ) -> pd.DataFrame:
     out = df.copy()
     out = out[out["Report Date"].notna()]
-    out = out[(out["Report Date"] >= start_dt) & (out["Report Date"] <= end_dt + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))]
+    range_end = end_dt + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+    out = out[(out["Report Date"] >= start_dt) & (out["Report Date"] <= range_end)]
+
+    if only_completed_in_range and "Completed On Filter Date" in out.columns:
+        completed_dt = pd.to_datetime(out["Completed On Filter Date"], errors="coerce")
+        out = out[completed_dt.notna() & (completed_dt >= start_dt) & (completed_dt <= range_end)]
 
     if selected_locations:
         out = out[out["Report Location"].isin(selected_locations)]
@@ -931,11 +944,28 @@ def render_outstanding_po_tab(po_df: pd.DataFrame, selected_locations: list[str]
 
     c1, c2, c3 = st.columns([1.2, 1.2, 1.4])
     with c1:
-        loc_options = sorted([x for x in outstanding.get("Location", pd.Series(dtype=str)).dropna().astype(str).unique().tolist() if x])
+        loc_options = sorted([
+            x for x in outstanding.get("Location", pd.Series(dtype=str))
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .unique()
+            .tolist()
+            if x
+        ])
+        # Streamlit requires every default value to exist in the current options list.
+        # Main Location selections can include locations with no outstanding PO lines,
+        # so keep only defaults that are valid for this tab.
+        selected_location_defaults = [loc for loc in (selected_locations or []) if loc in loc_options]
+        if "outstanding_location_filter" in st.session_state:
+            st.session_state["outstanding_location_filter"] = [
+                loc for loc in st.session_state["outstanding_location_filter"]
+                if loc in loc_options
+            ]
         tab_locations = st.multiselect(
             "Outstanding Location Filter",
             loc_options,
-            default=selected_locations if selected_locations else [],
+            default=selected_location_defaults,
             key="outstanding_location_filter",
             help="Uses the main Location filter as the default when selected.",
         )
@@ -1037,6 +1067,7 @@ if missing:
 
 st.caption(
     f"Date column: {meta.get('date_col') or 'not found'} | "
+    f"Completed column: {meta.get('completed_col') or 'not found'} | "
     f"Cost column: {meta.get('cost_col') or 'not found'} | "
     f"Location column: {meta.get('location_col') or 'not found'} | "
     f"Type column: {meta.get('ns_item_col') or 'not found'}"
@@ -1087,7 +1118,7 @@ start_dt, end_dt = date_window(df, period_mode, selected_month, custom_start, cu
 
 st.subheader("Additional PO Filters")
 
-a1, a2, a3 = st.columns([1.2, 1, 1.2])
+a1, a2, a3, a4 = st.columns([1.2, 1, 1.2, 1.2])
 
 category_options = [
     "Capital / Construction in Progress - 16910",
@@ -1113,6 +1144,16 @@ with a3:
     vendor_options = sorted([x for x in df.get("Vendor", pd.Series(dtype=str)).dropna().astype(str).unique().tolist() if x])
     selected_vendors = st.multiselect("Vendor", vendor_options)
 
+with a4:
+    only_completed_in_range = st.toggle(
+        "Only POs completed in selected date range",
+        value=False,
+        key="po_completed_in_selected_date_range",
+        help="When on, keeps only PO rows where Completed On falls inside the selected date range. When off, the report uses the normal report date filter.",
+    )
+
+if only_completed_in_range and df.get("Completed On Filter Date", pd.Series(dtype="datetime64[ns]")).dropna().empty:
+    st.warning("The Completed On filter is on, but no valid Completed On dates were found in the Purchase_Orders data.")
 
 fdf = apply_filters(
     df,
@@ -1123,6 +1164,7 @@ fdf = apply_filters(
     selected_types=selected_types,
     start_dt=start_dt,
     end_dt=end_dt,
+    only_completed_in_range=only_completed_in_range,
 )
 
 report_tab, outstanding_po_tab, kpi_review_tab, kpi_otr_tab = st.tabs(["PO Report", "Outstanding POs", "KPI Review", "KPI OTR"])
@@ -1155,7 +1197,8 @@ with report_tab:
     k4.metric("Vendors", f"{vendors:,}")
     k5.metric("POs With MWO", f"{po_with_mwo:,}", help=f"Unique filtered purchase orders with a non-blank Maintenance Work Order. Unique MWO numbers: {unique_mwo_count:,}")
     
-    st.caption(f"Showing {start_dt:%Y-%m-%d} through {end_dt:%Y-%m-%d}")
+    completed_filter_label = " | Completed On filter: ON" if only_completed_in_range else " | Completed On filter: OFF"
+    st.caption(f"Showing {start_dt:%Y-%m-%d} through {end_dt:%Y-%m-%d}{completed_filter_label}")
     
     # -----------------------------
     # Charts
@@ -1258,6 +1301,7 @@ with report_tab:
     filters_for_pdf = {
         "Location": ", ".join(selected_locations) if selected_locations else "All",
             "Date Range": f"{start_dt:%Y-%m-%d} to {end_dt:%Y-%m-%d}",
+        "Completed On Filter": "Only POs completed in selected date range" if only_completed_in_range else "Off - all POs in normal report date range",
         "Cost Category": ", ".join(selected_categories) if selected_categories else "All",
         "Status": ", ".join(selected_statuses) if selected_statuses else "All",
         "Vendor": ", ".join(selected_vendors) if selected_vendors else "All",
